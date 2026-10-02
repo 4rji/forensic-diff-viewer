@@ -1,5 +1,9 @@
 """Extended-attribute extraction with debugfs (read-only: never ``-w``), validated by inode.
 
+debugfs always runs with ``-c`` (catastrophic mode): it does not read the allocation bitmaps,
+which xattr lookups do not need, and it forces a read-only open. Live captures often carry
+bitmaps whose checksums no longer match, and without ``-c`` debugfs refuses to open them.
+
 debugfs is queried by inode number. Its enumeration (``ea_list``) is accepted only when it
 agrees with the independent structural parse (``xattr_struct``), because debugfs 1.47.2 can
 silently drop attributes (e.g. a corrupt EA block yields empty output and exit 0). Values are
@@ -96,7 +100,7 @@ class XattrExtractor:
     def _run_batch(self, commands: list[str], tmp: Path, target: str):
         cmdfile = tmp / "cmds"
         cmdfile.write_text("\n".join(commands) + "\n")
-        res = self.runner.run(["debugfs", "-f", str(cmdfile), target], tool="debugfs")
+        res = self.runner.run(["debugfs", "-c", "-f", str(cmdfile), target], tool="debugfs")
         if not res.ok:
             return res, None
         try:
@@ -108,7 +112,7 @@ class XattrExtractor:
         return res, [out for _, out in parts]
 
     def _run_one(self, command: str, target: str):
-        return self.runner.run(["debugfs", "-R", command, target], tool="debugfs")
+        return self.runner.run(["debugfs", "-c", "-R", command, target], tool="debugfs")
 
     def _list_all(self, inodes, tmp, target) -> dict:
         """ino -> list[(name, size)] or Assessed.error."""

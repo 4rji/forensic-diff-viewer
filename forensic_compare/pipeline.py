@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from .analyzer import analyze_source
 from .capture_meta import Resolved, Valued, reference_check
 from .comparator import compare_manifests, summarize
+from .integrity import sha256_file
 from .rules import apply_rules
 
 
@@ -244,8 +245,8 @@ def _pair_sections(pair, sid, ga, ca, ruleset, ref, gmeta, cmeta, all_ids, resul
     if ga.kind == "disk":
         return _disk_sections(sid, image, ga, ca, ruleset, ref, gmeta, cmeta, all_ids, result)
     # image-level
-    gh = pre_hashes.get(f"golden:{pair.golden.name}")
-    ch = pre_hashes.get(f"current:{pair.current.name}")
+    gh = _image_hash(pre_hashes, "golden", pair.golden)
+    ch = _image_hash(pre_hashes, "current", pair.current)
     reason = ga.reason or ca.reason
     section = {"id": sid, "title": sid, "kind": "image-level", "parent": None, "image": image,
                "role": ref.role, "status": "limited", "reason": reason,
@@ -254,6 +255,18 @@ def _pair_sections(pair, sid, ga, ca, ruleset, ref, gmeta, cmeta, all_ids, resul
                "current": dict(_side_desc(ca), sha256=ch),
                "identical": (gh == ch) if gh and ch else None}
     return [section], [f"{sid}: {reason}"]
+
+
+def _image_hash(pre_hashes, side, src):
+    """Image hash for an image-level comparison: the integrity pre-hash when one was taken,
+    else hashed here (the hash is the only comparison available for these sources)."""
+    key = f"{side}:{src.name}"
+    if key in pre_hashes:
+        return pre_hashes[key]
+    try:
+        return sha256_file(src)
+    except OSError:
+        return None
 
 
 def _standalone_boot(gmeta, cmeta, image):

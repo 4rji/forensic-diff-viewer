@@ -94,8 +94,15 @@
     status: 'all', hideUnchanged: true, hideExpected: false, sensitiveOnly: false, search: '',
     sortKey: 'priority', sortDir: 1, page: 1
   };
+  // The report opens on the file table of the first filesystem section (files are what an
+  // analyst reviews first); the overview stays one click away.
+  function defaultView() {
+    var srcs = DATA.sources || [];
+    var fsec = srcs.filter(function (s) { return s.kind === 'filesystem'; })[0] || srcs[0];
+    return fsec ? { type: 'source', id: fsec.id } : { type: 'overview' };
+  }
   var state = {
-    view: load('view', { type: 'overview' }),
+    view: defaultView(),
     filters: Object.assign({}, DEFAULT_FILTERS),
     pageSize: load('pageSize', 200),
     selected: null,
@@ -104,7 +111,6 @@
   };
   var sectionsById = {};
   (DATA.sources || []).forEach(function (s) { sectionsById[s.id] = s; });
-  if (state.view.type === 'source' && !sectionsById[state.view.id]) state.view = { type: 'overview' };
 
   // ---- theme ------------------------------------------------------------------------------
   function preferredTheme() {
@@ -166,9 +172,10 @@
   }
   function renderTopbar() {
     var integ = DATA.integrity || {};
-    var cls = integ.overall === 'verified' ? 'ok' : integ.overall === 'failed' ? 'danger' : 'warn';
+    var cls = integrityClass(integ.overall);
     var label = integ.overall === 'verified' ? 'Integrity verified' :
-      integ.overall === 'failed' ? 'Integrity FAILED' : 'Integrity: stable, unverified';
+      integ.overall === 'failed' ? 'Integrity FAILED' :
+      integ.overall === 'not-checked' ? 'Integrity: not checked by this run' : 'Integrity: stable, unverified';
     return el('header', { class: 'topbar' },
       el('button', {
         'aria-label': 'Toggle sidebar', title: 'Toggle sidebar',
@@ -233,7 +240,7 @@
   }
   function go(view) {
     state.view = view; state.selected = null; state.filters.page = 1;
-    save('view', view); render(); window.scrollTo(0, 0);
+    render(); window.scrollTo(0, 0);
   }
 
   // ---- generic tables -------------------------------------------------------------------------
@@ -482,6 +489,22 @@
     ['capability', 'Capabilities', fmtCap, ['capability']],
     ['xattrs', 'Extended attributes', fmtXattrs, ['xattr:']]
   ];
+  // Line diff pages are written by --text-diffs as diffs/NNNN.html next to the report.
+  var DIFF_FILE = /^diffs\/\d{4,}\.html$/;
+  function textDiff(e) {
+    if (e.status !== 'modified') return null;
+    var d = e.text_diff;
+    if (d && d.file && DIFF_FILE.test(d.file)) {
+      return el('p', { class: 'textdiff' },
+        el('a', { class: 'btn', href: d.file, target: '_blank', rel: 'noopener noreferrer' }, 'Open line diff in a new tab ↗'),
+        ' ', el('span', { class: 'chip ok' }, '+' + d.added), ' ', el('span', { class: 'chip danger' }, '−' + d.removed));
+    }
+    if (d && d.reason) return el('p', { class: 'muted' }, 'Line diff not available: ' + d.reason + '.');
+    if (!(DATA.options || {}).text_diffs && sha(e.golden) && sha(e.current) && sha(e.golden) !== sha(e.current)) {
+      return el('p', { class: 'muted' }, 'Line diffs were not generated for this report (run with --text-diffs).');
+    }
+    return null;
+  }
   function renderDetail(e) {
     var box = el('aside', { class: 'detail', id: 'detail', 'aria-label': 'Entry details' });
     box.appendChild(el('button', { class: 'close', 'aria-label': 'Close details', onclick: function () { state.selected = null; renderSectionBody(); } }, '✕'));
@@ -490,6 +513,8 @@
       e.kind ? el('span', { class: 'chip' }, e.kind) : null,
       e.boot ? el('span', { class: 'chip warn' }, 'boot partition') : null,
       e.expectation !== 'none' ? el('span', { class: 'chip ' + (e.expectation === 'full' ? 'ok' : 'warn') }, e.expectation === 'full' ? 'Expected' : 'Partially expected') : null));
+    var td = textDiff(e);
+    if (td) box.appendChild(td);
     if (e.incomplete_reasons.length) {
       box.appendChild(el('div', { class: 'panel' }, el('b', { class: 'na' }, 'Not fully assessed'), list(e.incomplete_reasons)));
     }
@@ -651,10 +676,13 @@
   }
 
   // ---- case views -------------------------------------------------------------------------------
+  function integrityClass(status) {
+    return status === 'verified' ? 'ok' : status === 'failed' ? 'danger' : status === 'not-checked' ? '' : 'warn';
+  }
   function verdictChip(v) {
-    var cls = v.status === 'verified' ? 'ok' : v.status === 'failed' ? 'danger' : 'warn';
-    var label = v.status === 'verified' ? 'verified' : v.status === 'failed' ? 'FAILED — integrity not established' : 'stable, unverified';
-    return el('span', { class: 'chip ' + cls }, label);
+    var label = v.status === 'verified' ? 'verified' : v.status === 'failed' ? 'FAILED — integrity not established' :
+      v.status === 'not-checked' ? 'not checked' : 'stable, unverified';
+    return el('span', { class: 'chip ' + integrityClass(v.status) }, label);
   }
   function renderIntegrity() {
     var i = DATA.integrity || {};
@@ -682,7 +710,7 @@
       var c = (DATA.capture || {})[side] || {};
       var rows = Object.keys(c.fields || {}).map(function (k) { return [el('span', { class: 'mono' }, k), refVal(c.fields[k])]; });
       box.appendChild(el('div', { class: 'panel' }, el('h3', null, side === 'golden' ? 'Golden' : 'Current'),
-        c.present ? null : el('p', { class: 'muted' }, 'capture.yaml not present: every value is not recorded.'),
+        c.present ? el('p', { class: 'muted mono' }, 'Read from ' + (c.path || 'capture.yaml')) : el('p', { class: 'muted' }, 'No capture file (capture.yaml or <image>.capture.yaml): every value is not recorded.'),
         list(c.errors),
         rows.length ? simpleTable(['Field', 'Value (provenance)'], rows) : null,
         el('h4', null, 'Supporting files (copied verbatim to supporting/' + side + '/; device-info.txt is never parsed)'),

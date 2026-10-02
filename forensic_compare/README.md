@@ -13,9 +13,12 @@ Principles:
 - **Incomplete is never unchanged.** Anything that could not be read or validated is shown as
   *not assessed*, and the analysis is marked incomplete.
 - **Inputs are read-only.** Images are opened `O_RDONLY` and never mounted. `debugfs` runs
-  without `-w`. Images are hashed before and after the analysis.
+  without `-w`, in catastrophic mode (`-c`), which forces a read-only open.
 - **Provenance is explicit.** Every metadata value records where it came from. Unknown values
   stay unknown.
+- **Image integrity is the analyst's step.** By default the images are not hashed: verify them
+  before the run. `--verify-integrity` hashes every image before and after the analysis and
+  checks the supplied checksum manifests. Without it, integrity shows as *not checked*.
 - **Integrity ≠ authenticity.** "Verified" means the image matches a supplied checksum and did
   not change during analysis. It does not establish that the firmware is authentic or free of
   compromise.
@@ -41,6 +44,8 @@ python forensic_compare/compare.py clean.dd current.dd -o report/
   --jobs N          concurrent tool processes (default min(4, CPUs))
   --timeout SEC     per-command timeout (default 600)
   --force           write into a non-empty output dir (removes only the previous run's files)
+  --verify-integrity  hash every image before and after the analysis and check checksum files
+  --text-diffs      side-by-side line diff page for each modified text file (see below)
   --quiet           no progress output
 ```
 
@@ -48,8 +53,8 @@ python forensic_compare/compare.py clean.dd current.dd -o report/
 
 | Code | Meaning |
 |---|---|
-| 0 | Report generated, analysis complete, and every image's integrity `verified` |
-| 3 | Report generated, but the analysis is incomplete or limited, or some integrity is not `verified` |
+| 0 | Report generated and analysis complete (with `--verify-integrity`: and every image `verified`) |
+| 3 | Report generated, but the analysis is incomplete or limited, or (with `--verify-integrity`) some integrity is not `verified` |
 | 2 | Usage error or fatal error |
 
 Differences, however many, never change the exit code. Reference notices (mismatch or
@@ -63,6 +68,7 @@ report/
 ├── comparison.json           # everything the report shows
 ├── manifests/<source>/{golden,current}.json
 ├── supporting/{golden,current}/   # capture.yaml, device-info.txt, checksum files (verbatim)
+├── diffs/NNNN.html            # with --text-diffs: one line-diff page per modified text file
 ├── tool_log.jsonl            # every external command: argv, status, diagnostics, timing, bytes
 └── outputs.json              # the files written by this run (used by --force)
 ```
@@ -81,7 +87,7 @@ golden/
 ├── nvram-crypt.dd
 ├── mmcblk0.dd
 ├── mtdblock0.bin
-├── SHA256SUMS                  # sha256sum format; *.sha256 / *.sha256sum also accepted
+├── SHA256SUMS                  # used with --verify-integrity; *.sha256 / *.sha256sum also accepted
 ├── capture.yaml                # optional, written by the analyst
 └── device-info.txt             # optional; copied verbatim, never parsed
 ```
@@ -102,7 +108,7 @@ How each image is handled:
 | ext2/3/4 filesystem image | Full file and metadata comparison |
 | Partitioned disk (MBR/GPT) | Layout comparison. ext partitions are fully compared as their own sections. LUKS partitions are reported as *encrypted*; squashfs, UBI and JFFS2 as *unsupported (needs extractor)*; anything else as *unknown*. The absence of a signature never means "unencrypted". |
 | Anything else (e.g. raw flash `.bin`) | *Image-level only*: signature detection and an identical/different image hash. This is not a file-level comparison. |
-| Present on one side only | *Unmatched source*. Its integrity is still checked. Its contents are never reported as added or deleted. |
+| Present on one side only | *Unmatched source*. Its integrity is checked with `--verify-integrity`. Its contents are never reported as added or deleted. |
 
 ### capture.yaml
 
@@ -138,6 +144,34 @@ Every value carries its provenance:
 - `capture-command` (from `observations`).
 
 If two provenances disagree, the value is shown as **Conflict**.
+
+### Per-image capture files (two image files)
+
+When you compare two image files, each one can have its own `<image>.capture.yaml` next to
+it. The two images can then sit in the same folder:
+
+```
+sample/
+├── config-active-crypt1.dd
+├── config-active-crypt1.dd.capture.yaml
+├── config-active-crypt2.dd
+└── config-active-crypt2.dd.capture.yaml
+```
+
+```yaml
+# config-active-crypt2.dd.capture.yaml
+schema: 1
+device_model: XYZ-100
+role: config-active              # top-level role: only valid in a per-image file
+firmware:
+  active: "24.12.0"
+```
+
+- A per-image file replaces the folder's `capture.yaml` for that image.
+- Without one, both images read the folder's `capture.yaml`. A single file cannot confirm
+  that two captures match, so the reference stays *unverified* and the report says why.
+- `sources:` and `partitions:` entries may use each image's own file name.
+- In directory mode, per-image files are listed as "not used".
 
 **Reference notices.** The required fields are `device_model` plus the source firmware for
 configuration roles.
@@ -223,6 +257,7 @@ Rule semantics:
 
 - **Banners:** persistent banners for Integrity FAILED, Reference mismatch/unverified and
   Incomplete analysis. They can be collapsed but never dismissed.
+- **Start view:** the report opens on the file table of the first filesystem section.
 - **Sidebar:** per-source sections, plus disk partitions, image-level and unmatched sources,
   integrity, capture metadata, rules, files not used, and tools.
 - **Summary cards:** computed before filters are applied.
@@ -244,7 +279,24 @@ Phase 2, decided but not yet implemented:
 - vertical/horizontal layout;
 - card view on narrow screens;
 - virtualized rendering;
-- opt-in text diffs, with per-file and total limits.
+
+## Line diffs (`--text-diffs`)
+
+With `--text-diffs`, every **Modified** regular file whose content changed and is text on both
+sides gets a side-by-side line diff page, `diffs/NNNN.html`. The detail panel links to it
+("Open line diff in a new tab").
+
+- **Re-read and checked.** Both versions are extracted again with `icat` (read-only), and the
+  page is written only if each one matches the SHA-256 recorded during the analysis.
+- **Limits.** Files above 1 MiB, binary files (ELF, other binary) and anything over 64 MiB in
+  total get a reason instead of a page.
+- **Display.** Long unchanged runs are collapsed. Similar lines get character-level
+  highlights. Invalid UTF-8 is shown as `�`.
+- **Safety.** The pages have no script and a strict CSP, and content is rendered as escaped
+  text.
+- **Content in the output.** The pages contain the file content, which may include keys or
+  passwords, so the option is off by default. Diffs never change a status, a priority or the
+  exit code.
 
 ## Limitations
 
@@ -254,7 +306,8 @@ Phase 2, decided but not yet implemented:
 - **Lossy names:** names containing control characters are rendered lossily by TSK and flagged
   as such.
 - **Live captures:** the filesystem may need journal recovery. `needs_recovery` is reported,
-  and the journal is not replayed.
+  and the journal is not replayed. Allocation-bitmap checksums may not match; they are not
+  read (`debugfs -c`) and are not reported.
 - **Performance:** one `icat` process runs per regular file. 20,000 files per side took about
   4.5 minutes with `--jobs 4` on the test machine.
 

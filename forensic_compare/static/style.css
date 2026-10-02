@@ -226,3 +226,6 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
   .detail { width: 100%; position: static; max-height: none; }
   .content { padding: 12px; }
 }
+.textdiff { margin: 12px 0; }
+a.btn { display: inline-block; padding: 4px 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius); text-decoration: none; color: var(--accent); font-weight: 600; }
+a.btn:hover { text-decoration: underline; }

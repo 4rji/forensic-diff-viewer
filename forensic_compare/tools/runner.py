@@ -13,6 +13,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import shutil
 import signal
 import subprocess
 import threading
@@ -34,6 +35,17 @@ VERSION_ARGS = {
     "icat": ["-V"],
     "debugfs": ["-V"],
 }
+
+
+# Admin tools such as debugfs live in sbin, which many user PATHs (e.g. Debian) omit.
+SBIN_DIRS = ("/usr/sbin", "/sbin")
+
+
+def resolve_tool(name: str) -> str:
+    """Return name unchanged if it is a path or found in PATH, else its sbin location."""
+    if os.sep in name or shutil.which(name):
+        return name
+    return shutil.which(name, path=os.pathsep.join(SBIN_DIRS)) or name
 
 
 @dataclass
@@ -96,6 +108,7 @@ class ToolRunner:
 
     def _execute(self, argv, tool, timeout, sink, capture) -> RunResult:
         argv = [str(a) for a in argv]
+        argv[0] = resolve_tool(argv[0])
         timeout = self.timeout if timeout is None else timeout
         log_id = next(self._ids)
         diagnostics: list[dict] = []
