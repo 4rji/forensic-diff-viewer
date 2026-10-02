@@ -1,0 +1,45 @@
+# Expected-change rules — ILLUSTRATIVE EXAMPLE ONLY.
+#
+# Nothing below is enabled. The paths shown are NOT confirmed for any device: inspect the
+# captured images first, then write rules for the paths you have actually verified.
+#
+# Semantics (see README):
+# - A rule never changes a file's status and never hides it; it marks differences as expected.
+# - "sources" are exact source ids: an image filename (config-active-crypt.dd) or a partition
+#   (mmcblk0.dd#p1).
+# - "paths" are relative to the filesystem root (no leading "/"), case-sensitive.
+#   "*" stays within one directory level, "**" crosses directories, "?" is one character.
+# - "statuses": modified, added, deleted, metadata.
+# - "fields": only the listed differences are expected. Available tokens:
+#   existence, type, content, size, mode, suid, sgid, uid, gid, mtime, symlink_target,
+#   capability, xattr:<name or pattern>.
+#   * Added/deleted entries are covered only when "existence" is listed.
+#   * suid, sgid, capability and xattr:security.* must be named explicitly; "xattr:*" never
+#     covers security.* attributes.
+# - An entry is "Expected" only when ALL its differences are covered and it was fully
+#   assessed; otherwise it is "Partially expected" and the uncovered differences keep their
+#   priority.
+
+schema: 1
+
+rules: []
+#  - id: example-log-rotation
+#    label: "Log rotation"
+#    reason: "Logs are written continuously on a live device"
+#    sources: [nvram-crypt.dd]
+#    paths: ["log/**"]                      # NOT a confirmed path
+#    statuses: [modified, added, deleted]
+#    fields: [existence, content, size, mtime]
+#
+#  - id: example-device-keys
+#    label: "Device-specific keys"
+#    reason: "Each device has its own keys; golden keys differ by design"
+#    sources: [config-active-crypt.dd]
+#    paths: ["keys/*.pem"]                  # NOT a confirmed path
+#    statuses: [modified]
+#    fields: [content, size, mtime]
+
+elevate: []
+#  - sources: ["mmcblk0.dd#p1"]
+#    paths: ["**"]
+#    reason: "Boot chain: any uncovered change is reviewed first"
