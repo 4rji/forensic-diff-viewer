@@ -55,6 +55,23 @@ def pytest_runtest_makereport(item, call):
         report.longrepr = f"strict validation: skipped required test: {reason}"
 
 
+@pytest.fixture(scope="session")
+def fixtures_dir(tmp_path_factory):
+    """All synthetic fixtures, built once per session (needs mke2fs + debugfs)."""
+    if not (shutil.which("mke2fs") and shutil.which("debugfs")):
+        pytest.skip("e2fsprogs (mke2fs, debugfs) not available")
+    from tests.fixtures.build import build_all
+
+    out = tmp_path_factory.mktemp("fixtures")
+    meta = build_all(out)
+    yield out
+    # inputs must never be modified by the code under test
+    from tests.fixtures.build import _sha
+
+    changed = [rel for rel, digest in meta["sha256"].items() if _sha(out / rel) != digest]
+    assert not changed, f"fixture inputs were modified: {changed}"
+
+
 def tools_available():
     """Return {tool: path or None} for every external tool the suite may use."""
     return {t: shutil.which(t) for t in ("mmls", "fsstat", "fls", "icat", "debugfs", "mke2fs")}
