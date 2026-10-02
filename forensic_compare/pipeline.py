@@ -215,6 +215,9 @@ def analyze_all(pairing, ruleset, gmeta, cmeta, runner, *, jobs=4, quiet=True,
         result.reasons += reasons
     for u in pairing.unmatched:
         result.reasons.append(f"unmatched source: {u.name} ({u.side} only)")
+    if not pairing.pairs and not pairing.unmatched:
+        result.reasons.append("no supported images found in the inputs "
+                              "(.dd, .img, .raw, .bin)")
     for r in result.reasons:
         result.notices.append({"type": "incomplete", "source": None, "message": r})
     return result

@@ -130,3 +130,29 @@ def test_force_removes_only_previous_outputs(fixtures_dir, tmp_path):
     assert (out / "manifests/renamed.dd/current.json").exists()
     listed = json.loads((out / "outputs.json").read_text())["files"]
     assert "notes.txt" not in listed and "report.html" in listed
+
+
+def test_unwritable_output_location_exit2(tmp_path, capsys):
+    g, c = tmp_path / "g", tmp_path / "c"
+    g.mkdir()
+    c.mkdir()
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        if os.geteuid() == 0:
+            pytest.skip("root can write anywhere")
+        assert main([str(g), str(c), "-o", str(locked / "out")]) == 2
+        assert "error" in capsys.readouterr().err
+    finally:
+        locked.chmod(0o700)
+
+
+def test_no_images_found_is_reported(tmp_path):
+    g, c = tmp_path / "g", tmp_path / "c"
+    g.mkdir()
+    c.mkdir()
+    (g / "notes.txt").write_text("x")
+    assert main([str(g), str(c), "-o", str(tmp_path / "o"), "--quiet"]) == 3
+    comp = json.loads((tmp_path / "o/comparison.json").read_text())
+    assert any("no supported images" in r for r in comp["completeness"]["reasons"])

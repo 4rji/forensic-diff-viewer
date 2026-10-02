@@ -198,7 +198,7 @@ def main(argv=None, *, _hooks=None) -> int:
         check_output_location(out, pairing)
         ruleset = load_rules(args.rules)
         prepare_output(out, args.force)
-    except (ValueError, OutputError, RulesError) as exc:
+    except (ValueError, OutputError, RulesError, OSError) as exc:
         print(f"error: {exc}", file=err)
         return EXIT_FATAL
 
