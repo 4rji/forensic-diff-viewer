@@ -1,12 +1,12 @@
-"""Opt-in line diffs of modified text files (``--text-diffs``).
+"""Line diffs of modified text files (on by default; ``--no-text-diffs`` turns them off).
 
 For each Modified regular file whose content changed and is text on both sides, the content of
 both sides is extracted again with ``icat`` (read-only), checked against the SHA-256 recorded
 during the analysis, and rendered as a standalone side-by-side page ``diffs/NNNN.html``. The
 page has no script, a strict CSP, and shows file content as escaped text only.
 
-Diffs are a reading aid: they never change a status, a priority or the exit code. File content
-lands in the output directory, so the option is off by default.
+Diffs are a reading aid: they never change a status, a priority or the exit code. The pages
+contain file content, so the output directory must be handled as evidence.
 """
 from __future__ import annotations
 

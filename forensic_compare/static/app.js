@@ -489,7 +489,7 @@
     ['capability', 'Capabilities', fmtCap, ['capability']],
     ['xattrs', 'Extended attributes', fmtXattrs, ['xattr:']]
   ];
-  // Line diff pages are written by --text-diffs as diffs/NNNN.html next to the report.
+  // Line diff pages are written as diffs/NNNN.html next to the report (unless --no-text-diffs).
   var DIFF_FILE = /^diffs\/\d{4,}\.html$/;
   function textDiff(e) {
     if (e.status !== 'modified') return null;
@@ -501,7 +501,7 @@
     }
     if (d && d.reason) return el('p', { class: 'muted' }, 'Line diff not available: ' + d.reason + '.');
     if (!(DATA.options || {}).text_diffs && sha(e.golden) && sha(e.current) && sha(e.golden) !== sha(e.current)) {
-      return el('p', { class: 'muted' }, 'Line diffs were not generated for this report (run with --text-diffs).');
+      return el('p', { class: 'muted' }, 'Line diffs were turned off for this report (--no-text-diffs).');
     }
     return null;
   }

@@ -45,7 +45,7 @@ python forensic_compare/compare.py clean.dd current.dd -o report/
   --timeout SEC     per-command timeout (default 600)
   --force           write into a non-empty output dir (removes only the previous run's files)
   --verify-integrity  hash every image before and after the analysis and check checksum files
-  --text-diffs      side-by-side line diff page for each modified text file (see below)
+  --no-text-diffs   do not write the line diff pages for modified text files (see below)
   --quiet           no progress output
 ```
 
@@ -68,7 +68,7 @@ report/
 ├── comparison.json           # everything the report shows
 ├── manifests/<source>/{golden,current}.json
 ├── supporting/{golden,current}/   # capture.yaml, device-info.txt, checksum files (verbatim)
-├── diffs/NNNN.html            # with --text-diffs: one line-diff page per modified text file
+├── diffs/NNNN.html            # one line-diff page per modified text file
 ├── tool_log.jsonl            # every external command: argv, status, diagnostics, timing, bytes
 └── outputs.json              # the files written by this run (used by --force)
 ```
@@ -280,9 +280,9 @@ Phase 2, decided but not yet implemented:
 - card view on narrow screens;
 - virtualized rendering;
 
-## Line diffs (`--text-diffs`)
+## Line diffs
 
-With `--text-diffs`, every **Modified** regular file whose content changed and is text on both
+Every **Modified** regular file whose content changed and is text on both
 sides gets a side-by-side line diff page, `diffs/NNNN.html`. The detail panel links to it
 ("Open line diff in a new tab").
 
@@ -294,9 +294,9 @@ sides gets a side-by-side line diff page, `diffs/NNNN.html`. The detail panel li
   highlights. Invalid UTF-8 is shown as `�`.
 - **Safety.** The pages have no script and a strict CSP, and content is rendered as escaped
   text.
-- **Content in the output.** The pages contain the file content, which may include keys or
-  passwords, so the option is off by default. Diffs never change a status, a priority or the
-  exit code.
+- **Content in the output.** The pages contain the file content, so handle the output
+  directory as evidence. `--no-text-diffs` turns them off. Diffs never change a status, a
+  priority or the exit code.
 
 ## Limitations
 

@@ -74,9 +74,9 @@ def build_parser():
     p.add_argument("--verify-integrity", action="store_true",
                    help="hash every image before and after the analysis and check supplied "
                         "checksum manifests (off by default: verify the images beforehand)")
-    p.add_argument("--text-diffs", action="store_true",
-                   help="write a side-by-side line diff page for each modified text file "
-                        "(diffs/; puts file content in the output directory)")
+    p.add_argument("--no-text-diffs", dest="text_diffs", action="store_false",
+                   help="do not write the side-by-side line diff pages (diffs/) for modified "
+                        "text files")
     p.add_argument("--quiet", action="store_true", help="no progress output")
     p.add_argument("--version", action="version", version=f"forensic_compare {__version__}")
     return p
