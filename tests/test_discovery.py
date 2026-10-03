@@ -81,3 +81,30 @@ def test_mixed_or_missing_inputs_rejected(tmp_path):
         pair_inputs(g, g / "a.dd")
     with pytest.raises(ValueError):
         pair_inputs(tmp_path / "nope", g)
+
+
+def test_single_mode_uses_per_image_capture_sidecar(tmp_path):
+    d = _mk(tmp_path / "s", ["a.dd", "b.dd"])
+    for name in ("a.dd.capture.yaml", "b.dd.capture.yaml", "capture.yaml", "device-info.txt"):
+        (d / name).write_text("schema: 1\n")
+    p = pair_inputs(d / "a.dd", d / "b.dd")
+    assert p.golden_listing.capture_file == d / "a.dd.capture.yaml"
+    assert p.current_listing.capture_file == d / "b.dd.capture.yaml"
+    assert set(p.golden_listing.supporting) == {"a.dd.capture.yaml", "device-info.txt"}
+    assert set(p.current_listing.supporting) == {"b.dd.capture.yaml", "device-info.txt"}
+
+
+def test_single_mode_without_sidecar_uses_directory_capture_yaml(tmp_path):
+    d = _mk(tmp_path / "s", ["a.dd", "b.dd"])
+    (d / "capture.yaml").write_text("schema: 1\n")
+    p = pair_inputs(d / "a.dd", d / "b.dd")
+    assert p.golden_listing.capture_file == p.current_listing.capture_file == d / "capture.yaml"
+
+
+def test_capture_sidecar_is_not_used_in_directory_mode(tmp_path):
+    d = _mk(tmp_path / "g", ["a.dd"])
+    (d / "a.dd.capture.yaml").write_text("schema: 1\n")
+    lst = classify_dir(d)
+    assert lst.capture_file is None
+    reasons = dict(lst.not_used)
+    assert "a.dd.capture.yaml" in reasons and "two image files" in reasons["a.dd.capture.yaml"]

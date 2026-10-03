@@ -46,6 +46,7 @@ python forensic_compare/compare.py clean.dd current.dd -o report/
   --force           write into a non-empty output dir (removes only the previous run's files)
   --verify-integrity  hash every image before and after the analysis and check checksum files
   --no-text-diffs   do not write the line diff pages for modified text files (see below)
+  --allfiles        also write a content page for every other text file (see below)
   --quiet           no progress output
 ```
 
@@ -69,6 +70,7 @@ report/
 ├── manifests/<source>/{golden,current}.json
 ├── supporting/{golden,current}/   # capture.yaml, device-info.txt, checksum files (verbatim)
 ├── diffs/NNNN.html            # one line-diff page per modified text file
+├── files/NNNN.html            # with --allfiles: one content page per other text file
 ├── tool_log.jsonl            # every external command: argv, status, diagnostics, timing, bytes
 └── outputs.json              # the files written by this run (used by --force)
 ```
@@ -280,7 +282,7 @@ Phase 2, decided but not yet implemented:
 - card view on narrow screens;
 - virtualized rendering;
 
-## Line diffs
+## Line diffs and file pages
 
 Every **Modified** regular file whose content changed and is text on both
 sides gets a side-by-side line diff page, `diffs/NNNN.html`. The detail panel links to it
@@ -288,8 +290,13 @@ sides gets a side-by-side line diff page, `diffs/NNNN.html`. The detail panel li
 
 - **Re-read and checked.** Both versions are extracted again with `icat` (read-only), and the
   page is written only if each one matches the SHA-256 recorded during the analysis.
+- **`--allfiles`.** Every other regular text file also gets a content page,
+  `files/NNNN.html`: added files (current), deleted files (golden), and unchanged,
+  metadata-only or incomplete files (current). The detail panel links to it ("Open file").
+  This re-reads every text file, so on large images it adds time and output size. The run
+  prints how many pages were written and how long it took.
 - **Limits.** Files above 1 MiB, binary files (ELF, other binary) and anything over 64 MiB in
-  total get a reason instead of a page.
+  total get a reason instead of a page. Diffs come first in the 64 MiB budget.
 - **Display.** Long unchanged runs are collapsed. Similar lines get character-level
   highlights. Invalid UTF-8 is shown as `�`.
 - **Safety.** The pages have no script and a strict CSP, and content is rendered as escaped

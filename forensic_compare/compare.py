@@ -77,6 +77,10 @@ def build_parser():
     p.add_argument("--no-text-diffs", dest="text_diffs", action="store_false",
                    help="do not write the side-by-side line diff pages (diffs/) for modified "
                         "text files")
+    p.add_argument("--allfiles", dest="all_files", action="store_true",
+                   help="also write a page (files/) with the content of every other text file: "
+                        "added, deleted, unchanged... (re-reads every text file; slower on "
+                        "large images)")
     p.add_argument("--quiet", action="store_true", help="no progress output")
     p.add_argument("--version", action="version", version=f"forensic_compare {__version__}")
     return p
@@ -249,8 +253,10 @@ def _run(args, pairing, ruleset, out, hooks, command) -> int:
     try:
         result = analyze_all(pairing, ruleset, gmeta, cmeta, runner, jobs=args.jobs,
                              quiet=args.quiet, pre_hashes=dict(tracker.pre) if tracker else {})
-        n_diffs = build_diffs(result.sections, result.manifests, runner, writer) \
-            if args.text_diffs else None
+        pages = build_diffs(result.sections, result.manifests, runner, writer,
+                            text_diffs=args.text_diffs, all_files=args.all_files,
+                            jobs=args.jobs, quiet=args.quiet) \
+            if args.text_diffs or args.all_files else None
         if "after_analysis" in hooks:
             hooks["after_analysis"](pairing)
     finally:
@@ -300,7 +306,7 @@ def _run(args, pairing, ruleset, out, hooks, command) -> int:
                   "current": pairing.current_listing.not_used},
         completeness={"complete": complete, "reasons": result.reasons},
         notices=result.notices,
-        options={"text_diffs": bool(args.text_diffs),
+        options={"text_diffs": bool(args.text_diffs), "all_files": bool(args.all_files),
                  "verify_integrity": bool(args.verify_integrity)},
     )
     comparison = build_comparison(run)
@@ -311,8 +317,9 @@ def _run(args, pairing, ruleset, out, hooks, command) -> int:
     code = EXIT_OK if complete and overall in ("verified", NOT_CHECKED) else EXIT_INCOMPLETE
     if not args.quiet:
         print(f"report: {out / 'report.html'}", file=sys.stderr)
-        if n_diffs is not None:
-            print(f"text diffs: {n_diffs} page(s) in {out / 'diffs'}", file=sys.stderr)
+        if pages is not None:
+            print(f"file pages: {pages['diffs']} diff(s) in {out / 'diffs'}, {pages['views']} "
+                  f"file view(s) in {out / 'files'} ({pages['seconds']}s)", file=sys.stderr)
         print(f"analysis {'complete' if complete else 'INCOMPLETE/LIMITED'}; integrity "
               f"{overall}; exit {code}", file=sys.stderr)
     return code

@@ -37,7 +37,7 @@ def test_slow_large_inventory(big_capture, tmp_path, capsys):
     out = tmp_path / "report"
     t0 = time.monotonic()
     code = main([str(big_capture / "golden"), str(big_capture / "current"), "-o", str(out),
-                 "--jobs", "4"])
+                 "--jobs", "4", "--verify-integrity"])
     elapsed = time.monotonic() - t0
     err = capsys.readouterr().err
     assert code == 0, err[-2000:]

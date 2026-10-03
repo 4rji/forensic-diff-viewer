@@ -89,7 +89,8 @@ def test_cli_unreadable_image_exit3(tmp_path):
     cb.write_bytes(b"\0" * 4096)
     cb.chmod(0)
     try:
-        code = main([str(ga), str(cb), "-o", str(tmp_path / "out"), "--quiet"])
+        code = main([str(ga), str(cb), "-o", str(tmp_path / "out"), "--quiet",
+                     "--verify-integrity"])
     finally:
         cb.chmod(0o600)
     assert code == 3
@@ -124,7 +125,7 @@ def test_force_removes_only_previous_outputs(fixtures_dir, tmp_path):
     assert main([str(second / "golden"), str(second / "current"), "-o", str(out), "--quiet"]) == 2
     code = main([str(second / "golden"), str(second / "current"), "-o", str(out), "--quiet",
                  "--force"])
-    assert code == 3  # no checksums in the second set -> integrity unverified
+    assert code == 0  # image hashing is off by default, so missing checksums do not matter
     assert (out / "notes.txt").read_text() == "analyst notes"
     assert not (out / "manifests/config-active-crypt.dd").exists()
     assert (out / "manifests/renamed.dd/current.json").exists()
@@ -156,3 +157,31 @@ def test_no_images_found_is_reported(tmp_path):
     assert main([str(g), str(c), "-o", str(tmp_path / "o"), "--quiet"]) == 3
     comp = json.loads((tmp_path / "o/comparison.json").read_text())
     assert any("no supported images" in r for r in comp["completeness"]["reasons"])
+
+
+def _two_images_one_folder(tmp_path, files):
+    d = tmp_path / "sample"
+    d.mkdir()
+    for n in ("cfg1.dd", "cfg2.dd"):
+        (d / n).write_bytes(b"\0" * 4096)
+    for n, text in files.items():
+        (d / n).write_text(text)
+    out = tmp_path / "out"
+    main([str(d / "cfg1.dd"), str(d / "cfg2.dd"), "-o", str(out), "--quiet"])
+    return json.loads((out / "comparison.json").read_text())
+
+
+def test_per_image_capture_files_in_one_folder_verify_reference(tmp_path):
+    side = "schema: 1\ndevice_model: M1\nrole: config-active\nfirmware: {active: '1.0'}\n"
+    comp = _two_images_one_folder(tmp_path, {"cfg1.dd.capture.yaml": side,
+                                             "cfg2.dd.capture.yaml": side})
+    assert comp["sources"][0]["reference"]["status"] == "ok"
+    assert not any(n["type"].startswith("reference") for n in comp["notices"])
+    assert comp["capture"]["current"]["path"].endswith("cfg2.dd.capture.yaml")
+
+
+def test_shared_capture_yaml_in_one_folder_stays_unverified(tmp_path):
+    comp = _two_images_one_folder(tmp_path, {"capture.yaml": "schema: 1\ndevice_model: M1\n"})
+    ref = comp["sources"][0]["reference"]
+    assert ref["status"] == "unverified"
+    assert any("same capture file" in n for n in ref["notes"])

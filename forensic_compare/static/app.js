@@ -489,21 +489,34 @@
     ['capability', 'Capabilities', fmtCap, ['capability']],
     ['xattrs', 'Extended attributes', fmtXattrs, ['xattr:']]
   ];
-  // Line diff pages are written as diffs/NNNN.html next to the report (unless --no-text-diffs).
-  var DIFF_FILE = /^diffs\/\d{4,}\.html$/;
-  function textDiff(e) {
-    if (e.status !== 'modified') return null;
-    var d = e.text_diff;
-    if (d && d.file && DIFF_FILE.test(d.file)) {
-      return el('p', { class: 'textdiff' },
-        el('a', { class: 'btn', href: d.file, target: '_blank', rel: 'noopener noreferrer' }, 'Open line diff in a new tab ↗'),
-        ' ', el('span', { class: 'chip ok' }, '+' + d.added), ' ', el('span', { class: 'chip danger' }, '−' + d.removed));
+  // File pages written next to the report: diffs/NNNN.html (line diffs of modified text files)
+  // and, with --allfiles, files/NNNN.html (content of every other text file). Only these
+  // relative paths are ever used as link targets.
+  var PAGE_FILE = /^(diffs|files)\/\d{4,}\.html$/;
+  function pageLink(file, label) {
+    if (!PAGE_FILE.test(file)) return null;
+    return el('a', { class: 'btn', href: file, target: '_blank', rel: 'noopener noreferrer' }, label);
+  }
+  function filePages(e) {
+    var opts = DATA.options || {};
+    var d = e.text_diff, v = e.text_view, out = [];
+    if (d && d.file) {
+      out.push(el('p', { class: 'textdiff' }, pageLink(d.file, 'Open line diff in a new tab ↗'),
+        ' ', el('span', { class: 'chip ok' }, '+' + d.added), ' ', el('span', { class: 'chip danger' }, '−' + d.removed)));
+    } else if (d && d.reason) {
+      out.push(el('p', { class: 'muted' }, 'Line diff not available: ' + d.reason + '.'));
+    } else if (e.status === 'modified' && !opts.text_diffs && sha(e.golden) && sha(e.current) && sha(e.golden) !== sha(e.current)) {
+      out.push(el('p', { class: 'muted' }, 'Line diffs were turned off for this report (--no-text-diffs).'));
     }
-    if (d && d.reason) return el('p', { class: 'muted' }, 'Line diff not available: ' + d.reason + '.');
-    if (!(DATA.options || {}).text_diffs && sha(e.golden) && sha(e.current) && sha(e.golden) !== sha(e.current)) {
-      return el('p', { class: 'muted' }, 'Line diffs were turned off for this report (--no-text-diffs).');
+    if (v && v.file) {
+      out.push(el('p', { class: 'textdiff' }, pageLink(v.file, 'Open file (' + v.side + ') in a new tab ↗'),
+        ' ', el('span', { class: 'chip' }, v.lines + ' lines')));
+    } else if (v && v.reason) {
+      out.push(el('p', { class: 'muted' }, 'File view not available (' + v.side + '): ' + v.reason + '.'));
+    } else if (!opts.all_files && !(d && d.file) && (sha(e.golden) || sha(e.current))) {
+      out.push(el('p', { class: 'muted' }, 'File contents are only included for modified text files; run with --allfiles to view every text file.'));
     }
-    return null;
+    return out.length ? el('div', null, out) : null;
   }
   function renderDetail(e) {
     var box = el('aside', { class: 'detail', id: 'detail', 'aria-label': 'Entry details' });
@@ -513,8 +526,8 @@
       e.kind ? el('span', { class: 'chip' }, e.kind) : null,
       e.boot ? el('span', { class: 'chip warn' }, 'boot partition') : null,
       e.expectation !== 'none' ? el('span', { class: 'chip ' + (e.expectation === 'full' ? 'ok' : 'warn') }, e.expectation === 'full' ? 'Expected' : 'Partially expected') : null));
-    var td = textDiff(e);
-    if (td) box.appendChild(td);
+    var pages = filePages(e);
+    if (pages) box.appendChild(pages);
     if (e.incomplete_reasons.length) {
       box.appendChild(el('div', { class: 'panel' }, el('b', { class: 'na' }, 'Not fully assessed'), list(e.incomplete_reasons)));
     }

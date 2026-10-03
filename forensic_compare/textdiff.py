@@ -1,12 +1,17 @@
-"""Line diffs of modified text files (on by default; ``--no-text-diffs`` turns them off).
+"""File pages next to the report: line diffs of modified text files, and (``--allfiles``) a
+view of every other text file.
 
-For each Modified regular file whose content changed and is text on both sides, the content of
-both sides is extracted again with ``icat`` (read-only), checked against the SHA-256 recorded
-during the analysis, and rendered as a standalone side-by-side page ``diffs/NNNN.html``. The
-page has no script, a strict CSP, and shows file content as escaped text only.
+- **Diffs** (default; ``--no-text-diffs`` turns them off): each Modified regular file whose
+  content changed and is text on both sides gets a side-by-side page ``diffs/NNNN.html``.
+- **Views** (``--allfiles``): every other regular text file (added, deleted, unchanged,
+  metadata-only, incomplete) gets a page ``files/NNNN.html`` with its content. On large images
+  this re-reads every text file, so it is opt-in.
 
-Diffs are a reading aid: they never change a status, a priority or the exit code. The pages
-contain file content, so the output directory must be handled as evidence.
+Content is extracted again with ``icat`` (read-only), checked against the SHA-256 recorded
+during the analysis, and rendered as escaped text in a standalone page with no script and a
+strict CSP. Diffs come first in the shared size budget. Pages are a reading aid: they never
+change a status, a priority or the exit code. They contain file content, so the output
+directory must be handled as evidence.
 """
 from __future__ import annotations
 
@@ -14,8 +19,12 @@ import base64
 import difflib
 import hashlib
 import html
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from .progress import Progress
 from .tools.tsk import icat_stream
 
 MAX_FILE_BYTES = 1 << 20
@@ -30,12 +39,16 @@ def _ok(assessed):
     return assessed and assessed.get("state") == "ok"
 
 
+def _is_file(side):
+    return bool(side) and _ok(side.get("type")) and side["type"]["value"] == "file"
+
+
 def eligibility(entry: dict, max_file: int) -> str | None:
     """None when a line diff can be made for this entry, else the reason it cannot."""
     g, c = entry.get("golden"), entry.get("current")
     if entry.get("status") != "modified" or not g or not c:
         return "no content change"
-    if not all(_ok(s.get("type")) and s["type"]["value"] == "file" for s in (g, c)):
+    if not (_is_file(g) and _is_file(c)):
         return "not a regular file on both sides"
     if not all(_ok(s.get("content")) for s in (g, c)):
         return "content was not read on both sides"
@@ -45,8 +58,27 @@ def eligibility(entry: dict, max_file: int) -> str | None:
     if any(k not in TEXT_KINDS for k in kinds):
         return f"binary content ({' / '.join(kinds)}); compare the hashes"
     if any(s["size"]["value"] > max_file for s in (g, c)):
-        return f"larger than the {max_file} byte diff limit"
+        return f"larger than the {max_file} byte page limit"
     return None
+
+
+def view_side(entry: dict, max_file: int):
+    """(side, None) when a file view can be made, (side, reason) when it cannot, or None when
+    neither side is a regular file. Added → current, deleted → golden, else current first."""
+    order = {"added": ("current",), "deleted": ("golden",)}.get(entry.get("status"),
+                                                               ("current", "golden"))
+    files = [s for s in order if _is_file(entry.get(s))]
+    if not files:
+        return None
+    side = next((s for s in files if _ok(entry[s].get("content"))), None)
+    if side is None:
+        return files[0], "content was not read"
+    value = entry[side]["content"]["value"]
+    if value.get("kind") not in TEXT_KINDS:
+        return side, f"binary content ({value.get('kind')}); compare the hashes"
+    if entry[side]["size"]["value"] > max_file:
+        return side, f"larger than the {max_file} byte page limit"
+    return side, None
 
 
 def _extract(runner, manifest, inode: int, expected_sha: str) -> tuple[bytes | None, str | None]:
@@ -62,50 +94,125 @@ def _extract(runner, manifest, inode: int, expected_sha: str) -> tuple[bytes | N
     return bytes(buf), None
 
 
-def build_diffs(sections, manifests, runner, writer, *, max_file=MAX_FILE_BYTES,
-                max_total=MAX_TOTAL_BYTES) -> int:
-    """Adds ``text_diff`` ({file, added, removed} or {reason}) to every Modified file entry
-    and writes the pages. Returns the number of pages written."""
+@dataclass
+class _Job:
+    kind: str          # "diff" | "view"
+    section: str
+    entry: dict
+    sides: dict        # side -> Manifest
+    size: int
+    page: str | None = None
+    stats: dict = field(default_factory=dict)
+    reason: str | None = None
+
+
+def _plan(sections, manifests, max_file, all_files, text_diffs):
     by_key = {(sid, side): m for sid, side, m in manifests}
-    budget, count = max_total, 0
+    diffs, views = [], []
     for s in sections:
         if s.get("kind") != "filesystem":
             continue
-        gm, cm = by_key.get((s["id"], "golden")), by_key.get((s["id"], "current"))
+        ms = {side: by_key.get((s["id"], side)) for side in ("golden", "current")}
         for e in s["entries"]:
-            if e.get("status") != "modified":
+            reason = eligibility(e, max_file) if text_diffs else "no content change"
+            if reason is None:
+                if None in ms.values():
+                    e["text_diff"] = {"reason": "manifest unavailable"}
+                    continue
+                size = e["golden"]["size"]["value"] + e["current"]["size"]["value"]
+                diffs.append(_Job("diff", s["id"], e, ms, size))
                 continue
-            reason = eligibility(e, max_file)
-            if reason == "no content change":
-                continue
-            if reason is None and (gm is None or cm is None):
-                reason = "manifest unavailable"
-            size = sum(e[side]["size"]["value"] for side in ("golden", "current")) \
-                if reason is None else 0
-            if reason is None and size > budget:
-                reason = f"total diff limit ({max_total} bytes) reached"
-            texts = {}
-            for side, m in (("golden", gm), ("current", cm)):
-                if reason is not None:
-                    break
-                data, reason = _extract(runner, m, e[side]["inode"],
-                                        e[side]["content"]["value"]["sha256"])
-                texts[side] = data
-            if reason is not None:
+            if reason != "no content change" and e.get("status") == "modified":
                 e["text_diff"] = {"reason": reason}
+                if reason != "not a regular file on both sides":
+                    continue
+            if not all_files:
                 continue
-            budget -= size
-            count += 1
-            rel = f"diffs/{count:04d}.html"
-            golden_text, current_text = (texts[k].decode("utf-8", errors="replace")
-                                         for k in ("golden", "current"))
-            page, added, removed = _render(
-                path=e["path"], section=s["id"], golden_text=golden_text,
-                current_text=current_text, golden_sha=e["golden"]["content"]["value"]["sha256"],
-                current_sha=e["current"]["content"]["value"]["sha256"])
-            writer.write_text(rel, page)
-            e["text_diff"] = {"file": rel, "added": added, "removed": removed}
-    return count
+            vs = view_side(e, max_file)
+            if vs is None:
+                continue
+            side, why = vs
+            if why is None and ms[side] is None:
+                why = "manifest unavailable"
+            if why is not None:
+                e["text_view"] = {"side": side, "reason": why}
+                continue
+            views.append(_Job("view", s["id"], e, {side: ms[side]}, e[side]["size"]["value"]))
+    return diffs + views  # diffs first in the size budget
+
+
+def _run_job(job: _Job, runner) -> _Job:
+    texts = {}
+    for side, m in job.sides.items():
+        data, job.reason = _extract(runner, m, job.entry[side]["inode"],
+                                    job.entry[side]["content"]["value"]["sha256"])
+        if job.reason:
+            return job
+        texts[side] = data.decode("utf-8", errors="replace")
+    e = job.entry
+    if job.kind == "diff":
+        job.page, added, removed = _render(
+            path=e["path"], section=job.section, golden_text=texts["golden"],
+            current_text=texts["current"], golden_sha=e["golden"]["content"]["value"]["sha256"],
+            current_sha=e["current"]["content"]["value"]["sha256"])
+        job.stats = {"added": added, "removed": removed}
+    else:
+        (side, text), = texts.items()
+        job.page, lines = _render_view(path=e["path"], section=job.section, side=side,
+                                       text=text, sha=e[side]["content"]["value"]["sha256"])
+        job.stats = {"side": side, "lines": lines}
+    return job
+
+
+def build_diffs(sections, manifests, runner, writer, *, text_diffs=True, all_files=False,
+                jobs=4, quiet=True,
+                progress_stream=None, max_file=MAX_FILE_BYTES, max_total=MAX_TOTAL_BYTES) -> dict:
+    """Adds ``text_diff`` ({file, added, removed} or {reason}) to Modified text file entries
+    and, with all_files, ``text_view`` ({file, side, lines} or {side, reason}) to every other
+    regular file entry; writes the pages. Returns page counts and the elapsed time."""
+    t0 = time.monotonic()
+    budget, accepted = max_total, []
+    for job in _plan(sections, manifests, max_file, all_files, text_diffs):
+        key = "text_diff" if job.kind == "diff" else "text_view"
+        if job.size > budget:
+            job.entry[key] = {"reason": f"total page limit ({max_total} bytes) reached"}
+            if job.kind == "view":
+                job.entry[key]["side"] = next(iter(job.sides))
+            continue
+        budget -= job.size
+        accepted.append(job)
+
+    progress = Progress("file pages", quiet=quiet, stream=progress_stream)
+    total_bytes = sum(j.size for j in accepted)
+    done = {"n": 0, "bytes": 0}
+    counts = {"diffs": 0, "views": 0}
+
+    def work(job):
+        return _run_job(job, runner)
+
+    if accepted:
+        progress.update(0, len(accepted), 0, total_bytes, phase="extracting")
+    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        for job in pool.map(work, accepted):  # results in plan order: stable page numbers
+            key = "text_diff" if job.kind == "diff" else "text_view"
+            if job.reason:
+                job.entry[key] = {"reason": job.reason}
+                if job.kind == "view":
+                    job.entry[key]["side"] = next(iter(job.sides))
+            else:
+                counts[job.kind + "s"] += 1
+                rel = (f"diffs/{counts['diffs']:04d}.html" if job.kind == "diff"
+                       else f"files/{counts['views']:04d}.html")
+                writer.write_text(rel, job.page)
+                job.entry[key] = {"file": rel, **job.stats}
+                job.page = None  # release memory as pages are written
+            done["n"] += 1
+            done["bytes"] += job.size
+            progress.update(done["n"], len(accepted), done["bytes"], total_bytes,
+                            phase="extracting")
+    progress.finish()
+    counts["seconds"] = round(time.monotonic() - t0, 1)
+    return counts
 
 
 # --------------------------------------------------------------------------------------------
@@ -228,24 +335,45 @@ def _render(*, path, section, golden_text, current_text, golden_sha, current_sha
     if not blocks:
         blocks.append('<p class="note">Both files are empty or differ only in line endings.</p>')
 
+    meta = (f'{_esc(section)} · <span class="stats"><span class="a">+{added}</span>\n'
+            f'<span class="r">−{removed}</span></span><br>\n'
+            f'golden <code>{_esc(golden_sha)}</code><br>current <code>{_esc(current_sha)}</code>')
+    body = ('<table class="head"><colgroup><col class="n"><col><col class="n"><col></colgroup>\n'
+            '<thead><tr><th></th><th>Golden</th><th></th><th>Current</th></tr></thead></table>\n'
+            + "".join(blocks))
+    return _page(path, "diff", meta, "Golden on the left, current on the right.", body), \
+        added, removed
+
+
+def _page(path, kind, meta, lead, body) -> str:
     csp = f"default-src 'none'; style-src {_csp_hash(STYLE)}; base-uri 'none'; form-action 'none'"
-    page = f"""<!doctype html>
+    return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="{csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_esc(path)} · diff</title><style>{STYLE}</style></head><body>
+<title>{_esc(path)} · {kind}</title><style>{STYLE}</style></head><body>
 <h1>{_esc(path)}</h1>
-<div class="meta">{_esc(section)} · <span class="stats"><span class="a">+{added}</span>
-<span class="r">−{removed}</span></span><br>
-golden <code>{_esc(golden_sha)}</code><br>current <code>{_esc(current_sha)}</code></div>
-<p class="note">Golden on the left, current on the right. Content was re-read read-only with icat
-and matches the analysed SHA-256. It is shown as text only; invalid UTF-8 appears as �.</p>
-<table class="head"><colgroup><col class="n"><col><col class="n"><col></colgroup>
-<thead><tr><th></th><th>Golden</th><th></th><th>Current</th></tr></thead></table>
-{"".join(blocks)}
+<div class="meta">{meta}</div>
+<p class="note">{lead} Content was re-read read-only with icat and matches the analysed SHA-256.
+It is shown as text only; invalid UTF-8 appears as \ufffd.</p>
+{body}
 </body></html>
 """
-    return page, added, removed
+
+
+def _render_view(*, path, section, side, text, sha):
+    lines = _lines(text)
+    rows = "".join(f'<tr><td class="n">{i}</td><td class="t">{_esc(line)}</td></tr>'
+                   for i, line in enumerate(lines, 1))
+    body = ('<table><colgroup><col class="n"><col></colgroup><tbody>' + rows + "</tbody></table>"
+            if lines else '<p class="note">The file is empty.</p>')
+    meta = (f"{_esc(section)} · {_esc(side)} · {len(lines)} lines<br>\n"
+            f"{_esc(side)} <code>{_esc(sha)}</code>")
+    return _page(path, side, meta, f"Content of the {_esc(side)} file.", body), len(lines)
+
+
+def render_view_page(**kw) -> str:
+    return _render_view(**kw)[0]
 
 
 def render_diff_page(**kw) -> str:

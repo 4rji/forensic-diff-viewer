@@ -137,3 +137,28 @@ def test_clean_image_uses_batches_not_per_inode_fallback(fixtures_dir, tmp_path)
     runs = [json.loads(l) for l in log.read_text().splitlines()]
     work = [r for r in runs if r["tool"] == "debugfs"]
     assert len(work) == 2 and all("-f" in r["argv"] for r in work)  # one ea_list + one ea_get batch
+
+
+@pytest.mark.integration
+def test_bad_bitmap_checksum_does_not_block_xattrs(tmp_path, runner):
+    """Live captures can carry stale bitmap checksums; debugfs must still read the xattrs."""
+    import re
+
+    from tests.fixtures.build import _run, _tool
+
+    require_tools("debugfs")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "plain").write_bytes(b"x")
+    img = tmp_path / "live.img"
+    _run([_tool("mke2fs"), "-q", "-F", "-t", "ext4", "-b", "1024", "-O", "metadata_csum",
+          "-d", str(src), str(img), "4096"])
+    dump = _run([_tool("dumpe2fs"), str(img)]).stdout.decode()
+    bitmap_block = int(re.search(r"Block bitmap at (\d+)", dump).group(1))
+    with open(img, "r+b") as f:  # flip one bitmap bit: the stored checksum no longer matches
+        f.seek(bitmap_block * 1024 + 100)
+        b = f.read(1)[0]
+        f.seek(bitmap_block * 1024 + 100)
+        f.write(bytes([b ^ 0x01]))
+    r = _extract(runner, img, ["/plain"])
+    assert r["/plain"].state == "absent", r["/plain"].reason

@@ -33,7 +33,8 @@ def _run(golden, current, out, *extra, hooks=None):
 def full_run(fixtures_dir, tmp_path_factory):
     require_tools(*TOOLS)
     out = tmp_path_factory.mktemp("full") / "report"
-    code, comp = _run(fixtures_dir / "captures/golden", fixtures_dir / "captures/current", out)
+    code, comp = _run(fixtures_dir / "captures/golden", fixtures_dir / "captures/current", out,
+                      "--verify-integrity")
     return code, comp, out
 
 
@@ -44,7 +45,8 @@ def _section(comp, sid):
 def test_exit0_clean_set_with_differences(fixtures_dir, tmp_path):
     require_tools(*TOOLS)
     out = tmp_path / "r"
-    code, comp = _run(fixtures_dir / "captures_clean/golden", fixtures_dir / "captures_clean/current", out)
+    code, comp = _run(fixtures_dir / "captures_clean/golden", fixtures_dir / "captures_clean/current", out,
+                      "--verify-integrity")
     assert code == 0
     assert comp["integrity"]["overall"] == "verified"
     assert comp["completeness"] == {"complete": True, "reasons": []}
@@ -119,7 +121,7 @@ def test_integrity_change_during_analysis(fixtures_dir, tmp_path):
         with open(target, "ab") as f:
             f.write(b"\0")
 
-    code, comp = _run(cap / "golden", cap / "current", tmp_path / "r",
+    code, comp = _run(cap / "golden", cap / "current", tmp_path / "r", "--verify-integrity",
                       hooks={"after_analysis": mutate})
     assert code == 3
     v = next(i for i in comp["integrity"]["images"] if i["key"] == "current:config-active-crypt.dd")
@@ -138,13 +140,35 @@ def test_post_hash_runs_after_extraction_failure(fixtures_dir, tmp_path, monkeyp
     icat.chmod(icat.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("PATH", str(fake) + os.pathsep + os.environ["PATH"])
     cap = fixtures_dir / "captures_clean"
-    code, comp = _run(cap / "golden", cap / "current", tmp_path / "r", "--timeout", "1")
+    code, comp = _run(cap / "golden", cap / "current", tmp_path / "r", "--timeout", "1",
+                      "--verify-integrity")
     assert code == 3
     s = _section(comp, "config-active-crypt.dd")
     assert s["summary"]["incomplete_any"] > 0
     assert any("timeout" in r for e in s["entries"] for r in e["incomplete_reasons"])
     for v in comp["integrity"]["images"]:
         assert v["post"] and v["post"] == v["pre"] and v["status"] == "verified"
+
+
+def test_default_run_skips_image_hashing(fixtures_dir, tmp_path):
+    require_tools(*TOOLS)
+    code, comp = _run(fixtures_dir / "captures_clean/golden",
+                      fixtures_dir / "captures_clean/current", tmp_path / "r")
+    assert code == 0
+    assert comp["integrity"]["overall"] == "not-checked"
+    for v in comp["integrity"]["images"]:
+        assert v["status"] == "not-checked" and v["pre"] is None and v["post"] is None
+    assert not any(n["type"] == "integrity-failed" for n in comp["notices"])
+
+
+def test_default_run_still_compares_image_level_hashes(fixtures_dir, tmp_path):
+    require_tools(*TOOLS)
+    _, comp = _run(fixtures_dir / "captures/golden", fixtures_dir / "captures/current",
+                   tmp_path / "r")
+    assert comp["integrity"]["overall"] == "not-checked"
+    s = _section(comp, "mtdblock0.bin")
+    assert s["kind"] == "image-level" and s["identical"] is True, s.get("reason")
+    assert s["golden"]["sha256"] == s["current"]["sha256"] is not None
 
 
 def test_inputs_unmodified_by_full_run(fixtures_dir, full_run):
@@ -165,3 +189,66 @@ def test_tool_log_has_no_content(full_run):
 def test_tool_versions_recorded(full_run):
     _, comp, _ = full_run
     assert set(comp["tool_versions"]) >= {"fls", "icat", "fsstat", "mmls", "debugfs"}
+
+
+def test_text_diffs_written_for_modified_text_files(fixtures_dir, tmp_path):
+    require_tools(*TOOLS)
+    out = tmp_path / "r"
+    code, comp = _run(fixtures_dir / "captures_clean/golden",
+                      fixtures_dir / "captures_clean/current", out)
+    assert code == 0 and comp["options"]["text_diffs"] is True
+    entries = {e["path"]: e for e in _section(comp, "config-active-crypt.dd")["entries"]}
+    td = entries["/etc/app.conf"]["text_diff"]
+    assert td["added"] == 1 and td["removed"] == 1
+    page = (out / td["file"]).read_text()
+    assert 'class="del">mode=<mark>1</mark></td>' in page
+    assert 'class="add">mode=<mark>2</mark></td>' in page
+    assert "text_diff" not in entries["/etc/perm.conf"]  # metadata-only change: no content diff
+    listed = json.loads((out / "outputs.json").read_text())["files"]
+    assert td["file"] in listed
+
+
+def test_no_text_diffs_turns_them_off(fixtures_dir, tmp_path):
+    require_tools(*TOOLS)
+    out = tmp_path / "r"
+    _, comp = _run(fixtures_dir / "captures_clean/golden",
+                   fixtures_dir / "captures_clean/current", out, "--no-text-diffs")
+    assert comp["options"]["text_diffs"] is False
+    assert not (out / "diffs").exists()
+    assert not any("text_diff" in e or "text_view" in e
+                   for s in comp["sources"] for e in s.get("entries", []))
+
+
+def test_file_views_only_with_allfiles(fixtures_dir, tmp_path):
+    require_tools(*TOOLS)
+    _, comp = _run(fixtures_dir / "captures_clean/golden",
+                   fixtures_dir / "captures_clean/current", tmp_path / "a")
+    assert comp["options"]["all_files"] is False
+    assert not any("text_view" in e for s in comp["sources"] for e in s.get("entries", []))
+
+    out = tmp_path / "b"
+    _, comp = _run(fixtures_dir / "captures_clean/golden",
+                   fixtures_dir / "captures_clean/current", out, "--allfiles")
+    assert comp["options"]["all_files"] is True
+    entries = {e["path"]: e for e in _section(comp, "config-active-crypt.dd")["entries"]}
+    added = entries["/etc/new.conf"]["text_view"]
+    assert added["side"] == "current" and added["lines"] == 1
+    assert ">new</td>" in (out / added["file"]).read_text()
+    assert ">static</td>" in (out / entries["/etc/static.conf"]["text_view"]["file"]).read_text()
+    assert entries["/etc/perm.conf"]["text_view"]["side"] == "current"
+    assert "text_view" not in entries["/etc/app.conf"]  # modified: it has a diff instead
+    assert "text_diff" in entries["/etc/app.conf"]
+    listed = json.loads((out / "outputs.json").read_text())["files"]
+    assert added["file"] in listed
+
+
+def test_allfiles_without_diffs_views_modified_files(fixtures_dir, tmp_path):
+    require_tools(*TOOLS)
+    out = tmp_path / "r"
+    _, comp = _run(fixtures_dir / "captures_clean/golden",
+                   fixtures_dir / "captures_clean/current", out, "--allfiles", "--no-text-diffs")
+    entries = {e["path"]: e for e in _section(comp, "config-active-crypt.dd")["entries"]}
+    assert "text_diff" not in entries["/etc/app.conf"]
+    view = entries["/etc/app.conf"]["text_view"]
+    assert view["side"] == "current" and ">mode=2</td>" in (out / view["file"]).read_text()
+    assert not (out / "diffs").exists()
