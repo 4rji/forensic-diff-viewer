@@ -81,6 +81,13 @@ def test_app_js_has_no_dangerous_sinks():
         assert sink not in js, sink
 
 
+def test_only_link_is_the_validated_diff_page():
+    js = (STATIC / "app.js").read_text()
+    assert js.count("href:") == 1 and "href: file" in js
+    assert "var PAGE_FILE = /^(diffs|files)\\/\\d{4,}\\.html$/;" in js
+    assert "if (!PAGE_FILE.test(file)) return null;" in js
+
+
 def test_static_assets_cannot_break_out():
     assert "</script" not in (STATIC / "app.js").read_text().lower()
     assert "</style" not in (STATIC / "style.css").read_text().lower()

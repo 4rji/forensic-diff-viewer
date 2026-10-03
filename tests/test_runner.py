@@ -135,3 +135,18 @@ def test_version_recorded_only_when_used(fake_bin, runner):
 def test_lc_all_is_c(fake_bin, runner):
     fake_bin("envtool", "import os; print(os.environ.get('LC_ALL'))\n")
     assert runner.run(["envtool"], tool="envtool").stdout.strip() == b"C"
+
+
+def test_tool_outside_path_is_found_in_sbin(tmp_path, monkeypatch):
+    from forensic_compare.tools import runner as runner_mod
+
+    sbin = tmp_path / "sbin"
+    sbin.mkdir()
+    tool = sbin / "fake-sbin-tool"
+    tool.write_text(f"#!{sys.executable}\nprint('from sbin')\n")
+    tool.chmod(0o755)
+    monkeypatch.setattr(runner_mod, "SBIN_DIRS", (str(sbin),))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    r = ToolRunner(tmp_path / "tool_log.jsonl", timeout=10).run(["fake-sbin-tool"], tool="x")
+    assert r.ok and r.stdout == b"from sbin\n"
+    assert _log(tmp_path)[0]["argv"] == [str(tool)]

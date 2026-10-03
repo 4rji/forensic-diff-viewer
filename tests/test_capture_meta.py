@@ -124,3 +124,62 @@ partitions:
 def test_unquoted_version_kept_as_text(tmp_path):
     m = _meta(tmp_path, "g", "schema: 1\nfirmware:\n  active: 24.10\n")
     assert m.get("firmware.active").value == "24.10"
+
+
+def _single(tmp_path, gname, cname, files):
+    from forensic_compare.discovery import pair_inputs
+
+    d = tmp_path / "s"
+    d.mkdir()
+    for n in (gname, cname):
+        (d / n).write_bytes(b"\0" * 4096)
+    for n, text in files.items():
+        (d / n).write_text(text)
+    p = pair_inputs(d / gname, d / cname)
+    return (load_capture(p.golden_listing, as_name=gname),
+            load_capture(p.current_listing, as_name=gname))
+
+
+SIDECAR = """\
+schema: 1
+device_model: M1
+role: config-active
+firmware: {{active: "{fw}"}}
+"""
+
+
+def test_per_image_sidecars_verify_reference_in_one_folder(tmp_path):
+    g, c = _single(tmp_path, "cfg1.dd", "cfg2.dd", {
+        "cfg1.dd.capture.yaml": SIDECAR.format(fw="24.11.6"),
+        "cfg2.dd.capture.yaml": SIDECAR.format(fw="24.11.6")})
+    assert g.errors == [] and c.errors == []
+    rc = reference_check("cfg1.dd", g, c)
+    assert rc.role == "config-active" and rc.status == "ok", rc.to_dict()
+
+
+def test_per_image_sidecars_report_firmware_mismatch(tmp_path):
+    g, c = _single(tmp_path, "cfg1.dd", "cfg2.dd", {
+        "cfg1.dd.capture.yaml": SIDECAR.format(fw="24.11.6"),
+        "cfg2.dd.capture.yaml": SIDECAR.format(fw="24.12.0")})
+    assert reference_check("cfg1.dd", g, c).status == "mismatch"
+
+
+def test_current_sources_keyed_by_its_own_name(tmp_path):
+    text = "schema: 1\ndevice_model: M1\nsources:\n  {n}: {{role: nvram}}\n"
+    g, c = _single(tmp_path, "nv1.dd", "nv2.dd", {
+        "nv1.dd.capture.yaml": text.format(n="nv1.dd"),
+        "nv2.dd.capture.yaml": text.format(n="nv2.dd")})
+    rc = reference_check("nv1.dd", g, c)
+    assert rc.role == "nvram" and rc.status == "ok"
+
+
+def test_shared_capture_file_cannot_verify_reference(tmp_path):
+    g, c = _single(tmp_path, "cfg1.dd", "cfg2.dd", {"capture.yaml": BASE})
+    rc = reference_check("cfg1.dd", g, c)
+    assert rc.status == "unverified"
+    assert any("same capture file" in n for n in rc.notes)
+
+
+def test_role_key_is_rejected_in_directory_capture_yaml(tmp_path):
+    m = _meta(tmp_path, "g", "schema: 1\nrole: nvram\n")
+    assert any("role" in e for e in m.errors)

@@ -31,7 +31,8 @@ def report(fixtures_dir, tmp_path_factory):
     rules.write_text(yaml.safe_dump(RULES))
     out = base / "report"
     code = main([str(fixtures_dir / "captures/golden"), str(fixtures_dir / "captures/current"),
-                 "-o", str(out), "--quiet", "--rules", str(rules)])
+                 "-o", str(out), "--quiet", "--rules", str(rules), "--verify-integrity",
+                 "--allfiles"])
     assert code == 3
     return out / "report.html"
 
@@ -54,8 +55,11 @@ def page(browser, report):
     attempts, console, dialogs = [], [], []
     ctx.on("request", lambda r: attempts.append(r.url))  # recorded before any blocking
 
-    def gate(route):
-        if route.request.url == report.as_uri():
+    pages = (report.parent.as_uri() + "/diffs/", report.parent.as_uri() + "/files/")
+
+    def gate(route):  # only the report and its local diff / file pages may load
+        url = route.request.url
+        if url == report.as_uri() or (url.startswith(pages) and url.endswith(".html")):
             route.continue_()
         else:
             route.abort()
@@ -237,3 +241,34 @@ def test_works_without_storage(browser, report):
     pg.wait_for_selector(".topbar")
     assert errors == []
     ctx.close()
+
+
+def test_opens_on_first_file_table(page):
+    page.wait_for_selector("#entries")
+    assert page.locator("#entries tbody tr").count() > 0
+
+
+def test_line_diff_opens_in_new_tab(page):
+    open_section(page, "config-active-crypt.dd")
+    page.locator("#entries tbody tr", has=page.locator("td.path", has_text="/etc/modified.conf")).click()
+    link = page.locator("#detail a.btn", has_text="line diff")
+    assert link.get_attribute("target") == "_blank"
+    with page.context.expect_page() as info:
+        link.click()
+    diff = info.value
+    diff.wait_for_load_state()
+    assert diff.locator("td.del").first.inner_text() == "a"
+    assert diff.locator("td.add").first.inner_text() == "b"
+    assert diff.url.startswith(page.url.rsplit("/", 1)[0] + "/diffs/")
+    assert not [m for m in page.console_log if m[0] in ("error", "pageerror")]
+
+
+def test_added_file_opens_in_new_tab(page):
+    open_section(page, "config-active-crypt.dd")
+    page.locator("#entries tbody tr", has=page.locator("td.path", has_text="/etc/added.conf")).click()
+    link = page.locator("#detail a.btn", has_text="Open file")
+    with page.context.expect_page() as info:
+        link.click()
+    view = info.value
+    view.wait_for_load_state()
+    assert view.locator("td.t").first.inner_text() == "x"

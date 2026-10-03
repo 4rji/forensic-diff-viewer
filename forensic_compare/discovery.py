@@ -7,6 +7,8 @@ from pathlib import Path
 
 IMAGE_EXTENSIONS = (".dd", ".img", ".raw", ".bin")
 SUPPORTING_NAMES = ("capture.yaml", "device-info.txt")
+CAPTURE_FILE = "capture.yaml"
+SIDECAR_SUFFIX = ".capture.yaml"  # <image>.capture.yaml: metadata for one image (single mode)
 
 
 @dataclass
@@ -17,6 +19,7 @@ class DirListing:
     checksum_files: list = field(default_factory=list)
     supporting: dict = field(default_factory=dict)   # name -> Path
     not_used: list = field(default_factory=list)     # (name, reason)
+    capture_file: Path | None = None                 # capture metadata read for this side
 
 
 @dataclass
@@ -51,6 +54,8 @@ def _classify_name(name: str) -> tuple[str, str | None]:
         return "checksum", None
     if name in SUPPORTING_NAMES:
         return "supporting", None
+    if name.endswith(SIDECAR_SUFFIX):
+        return "not_used", "per-image capture file (used only when comparing two image files)"
     if name.endswith(IMAGE_EXTENSIONS):
         return "image", None
     return "not_used", "not a supported image or capture file"
@@ -76,14 +81,25 @@ def classify_dir(d: Path) -> DirListing:
             lst.supporting[name] = p
         else:
             lst.not_used.append((name, reason))
+    lst.capture_file = lst.supporting.get(CAPTURE_FILE)
     return lst
 
 
 def _single_listing(image: Path) -> DirListing:
+    """One image: its own <image>.capture.yaml replaces the directory's capture.yaml, so two
+    images in one folder can each carry their own capture metadata."""
     full = classify_dir(image.parent)
+    supporting = dict(full.supporting)
+    sidecar = image.parent / (image.name + SIDECAR_SUFFIX)
+    if sidecar.is_file():
+        supporting.pop(CAPTURE_FILE, None)
+        supporting[sidecar.name] = sidecar
+    else:
+        sidecar = full.capture_file
     return DirListing(directory=image.parent, images={image.name: image},
                       realpaths={image.name: str(image.resolve())},
-                      checksum_files=full.checksum_files, supporting=full.supporting)
+                      checksum_files=full.checksum_files, supporting=supporting,
+                      capture_file=sidecar)
 
 
 def pair_inputs(golden: Path, current: Path) -> Pairing:

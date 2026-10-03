@@ -38,6 +38,7 @@ class RunContext:
     not_used: dict
     completeness: dict
     notices: list = field(default_factory=list)
+    options: dict = field(default_factory=dict)  # e.g. {"text_diffs": bool}
 
 
 def build_comparison(run: RunContext) -> dict:

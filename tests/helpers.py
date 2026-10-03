@@ -10,7 +10,7 @@ def debugfs_bin():
 
 def ino_of(img, path, offset=0):
     target = f"{img}?offset={offset}" if offset else str(img)
-    out = subprocess.run([debugfs_bin(), "-R", f"stat {path}", target],
+    out = subprocess.run([debugfs_bin(), "-c", "-R", f"stat {path}", target],
                          capture_output=True, text=True).stdout
     m = re.search(r"Inode: (\d+)", out)
     assert m, f"inode of {path} not found in {img}"

@@ -6,7 +6,8 @@ Verdicts per image:
 - ``stable-unverified`` — pre == post, no supplied checksum ("stable, unverified against a
                           prior checksum");
 - ``failed``            — integrity not established (mismatch, changed during analysis, hashing
-                          error, conflicting checksums, or no post-analysis hash).
+                          error, conflicting checksums, or no post-analysis hash);
+- ``not-checked``       — image hashing was not requested (``--verify-integrity`` not given).
 
 "Verified" describes image integrity against the supplied checksum; it does not establish that
 the firmware is authentic or free of compromise.
@@ -22,6 +23,9 @@ from pathlib import Path
 CHUNK = 4 << 20
 DISCLAIMER = ("Verified describes image integrity against the supplied checksum; it does not "
               "establish that the firmware is authentic or free of compromise.")
+NOT_CHECKED = "not-checked"
+NOT_CHECKED_REASON = ("not hashed by this run: verify the image manually "
+                      "(or run with --verify-integrity)")
 _LINE = re.compile(r"^([0-9a-fA-F]{64}) ([ *])(.+)$")
 
 

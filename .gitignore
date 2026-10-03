@@ -3,3 +3,14 @@ __pycache__/
 *.pyc
 .pytest_cache/
 /report/
+
+# forensic images and captures (large, sensitive evidence; never commit)
+/sample/
+*.dd
+*.img
+*.raw
+*.bin
+*.partial
+
+# local agent working notes
+.superpowers/

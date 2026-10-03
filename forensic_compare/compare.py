@@ -7,8 +7,12 @@ Usage:
 GOLDEN and CURRENT are either two capture directories (images paired by exact filename) or two
 image files (one pair). Inputs are only read; nothing is mounted or written to them.
 
-Exit codes: 0 = complete analysis and every image integrity-verified; 3 = report generated but
-analysis incomplete/limited or integrity not verified; 2 = usage or fatal error.
+Image hashing (integrity) is off by default: the analyst verifies the images before the run.
+--verify-integrity hashes every image before and after the analysis and checks supplied
+checksum manifests.
+
+Exit codes: 0 = complete analysis (and, with --verify-integrity, every image verified); 3 = report
+generated but analysis incomplete/limited or integrity not verified; 2 = usage or fatal error.
 """
 from __future__ import annotations
 
@@ -29,7 +33,10 @@ from forensic_compare.capture_meta import load_capture  # noqa: E402
 from forensic_compare.discovery import pair_inputs  # noqa: E402
 from forensic_compare.integrity import (  # noqa: E402
     DISCLAIMER,
+    NOT_CHECKED,
+    NOT_CHECKED_REASON,
     IntegrityTracker,
+    Verdict,
     expected_checksums,
 )
 from forensic_compare.manifest import save_manifest  # noqa: E402
@@ -37,6 +44,7 @@ from forensic_compare.pipeline import analyze_all  # noqa: E402
 from forensic_compare.progress import Progress  # noqa: E402
 from forensic_compare.report import RunContext, build_comparison, render_html  # noqa: E402
 from forensic_compare.rules import RulesError, load_rules  # noqa: E402
+from forensic_compare.textdiff import build_diffs  # noqa: E402
 from forensic_compare.tools.runner import ToolRunner  # noqa: E402
 
 EXIT_OK, EXIT_FATAL, EXIT_INCOMPLETE = 0, 2, 3
@@ -63,6 +71,16 @@ def build_parser():
     p.add_argument("--force", action="store_true",
                    help="write into a non-empty output directory, replacing only the files "
                         "listed by a previous run's outputs.json")
+    p.add_argument("--verify-integrity", action="store_true",
+                   help="hash every image before and after the analysis and check supplied "
+                        "checksum manifests (off by default: verify the images beforehand)")
+    p.add_argument("--no-text-diffs", dest="text_diffs", action="store_false",
+                   help="do not write the side-by-side line diff pages (diffs/) for modified "
+                        "text files")
+    p.add_argument("--allfiles", dest="all_files", action="store_true",
+                   help="also write a page (files/) with the content of every other text file: "
+                        "added, deleted, unchanged... (re-reads every text file; slower on "
+                        "large images)")
     p.add_argument("--quiet", action="store_true", help="no progress output")
     p.add_argument("--version", action="version", version=f"forensic_compare {__version__}")
     return p
@@ -215,8 +233,10 @@ def _run(args, pairing, ruleset, out, hooks, command) -> int:
     runner = ToolRunner(out / "tool_log.jsonl", timeout=args.timeout, jobs=args.jobs)
     writer.adopt("tool_log.jsonl")
     progress = Progress("integrity", quiet=args.quiet)
-    gmeta = load_capture(pairing.golden_listing)
-    cmeta = load_capture(pairing.current_listing)
+    # single mode: both sides' declarations are looked up under the golden image name
+    as_name = pairing.pairs[0].golden.name if pairing.mode == "single" else None
+    gmeta = load_capture(pairing.golden_listing, as_name=as_name)
+    cmeta = load_capture(pairing.current_listing, as_name=as_name)
 
     items, checksum_reports = [], {}
     for side, listing in (("golden", pairing.golden_listing), ("current", pairing.current_listing)):
@@ -224,22 +244,32 @@ def _run(args, pairing, ruleset, out, hooks, command) -> int:
         checksum_reports[side] = report
         for name, path in listing.images.items():
             items.append((side, name, path, expected.get(name, [])))
-    tracker = IntegrityTracker(items, progress=progress)
-    tracker.hash_pre()
-    progress.finish()
+    tracker = IntegrityTracker(items, progress=progress) if args.verify_integrity else None
+    if tracker:
+        tracker.hash_pre()
+        progress.finish()
     if "after_pre_hash" in hooks:
         hooks["after_pre_hash"](pairing)
     try:
         result = analyze_all(pairing, ruleset, gmeta, cmeta, runner, jobs=args.jobs,
-                             quiet=args.quiet, pre_hashes=dict(tracker.pre))
+                             quiet=args.quiet, pre_hashes=dict(tracker.pre) if tracker else {})
+        pages = build_diffs(result.sections, result.manifests, runner, writer,
+                            text_diffs=args.text_diffs, all_files=args.all_files,
+                            jobs=args.jobs, quiet=args.quiet) \
+            if args.text_diffs or args.all_files else None
         if "after_analysis" in hooks:
             hooks["after_analysis"](pairing)
     finally:
-        tracker.hash_post()  # always, even after extraction failures or timeouts
-        progress.finish()
+        if tracker:
+            tracker.hash_post()  # always, even after extraction failures or timeouts
+            progress.finish()
 
-    verdicts = tracker.verdicts()
-    overall = tracker.overall()
+    if tracker:
+        verdicts, overall = tracker.verdicts(), tracker.overall()
+    else:
+        verdicts = {f"{side}:{name}": Verdict(NOT_CHECKED, NOT_CHECKED_REASON, expected, None, None)
+                    for side, name, _, expected in items}
+        overall = NOT_CHECKED
     images = []
     for key, v in verdicts.items():
         side, name = key.split(":", 1)
@@ -276,15 +306,20 @@ def _run(args, pairing, ruleset, out, hooks, command) -> int:
                   "current": pairing.current_listing.not_used},
         completeness={"complete": complete, "reasons": result.reasons},
         notices=result.notices,
+        options={"text_diffs": bool(args.text_diffs), "all_files": bool(args.all_files),
+                 "verify_integrity": bool(args.verify_integrity)},
     )
     comparison = build_comparison(run)
     writer.write_text("comparison.json", json.dumps(comparison, ensure_ascii=False, indent=1))
     writer.write_text("report.html", render_html(comparison))
     writer.finish()
 
-    code = EXIT_OK if complete and overall == "verified" else EXIT_INCOMPLETE
+    code = EXIT_OK if complete and overall in ("verified", NOT_CHECKED) else EXIT_INCOMPLETE
     if not args.quiet:
         print(f"report: {out / 'report.html'}", file=sys.stderr)
+        if pages is not None:
+            print(f"file pages: {pages['diffs']} diff(s) in {out / 'diffs'}, {pages['views']} "
+                  f"file view(s) in {out / 'files'} ({pages['seconds']}s)", file=sys.stderr)
         print(f"analysis {'complete' if complete else 'INCOMPLETE/LIMITED'}; integrity "
               f"{overall}; exit {code}", file=sys.stderr)
     return code
