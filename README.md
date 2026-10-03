@@ -4,7 +4,7 @@ Quick setup and usage guide for comparing forensic filesystem images on macOS or
 
 ## Project Structure
 
-![Project structure](images/project-structure.png)
+<img src="images/project-structure.png" alt="Project structure" width="50%">
 
 ## 1. Extract the Project
 
@@ -29,9 +29,11 @@ cd forensic_compare
 pip install -r requirements.txt
 ```
 
-![Virtual environment setup](images/virtualenv-setup.png)
+<img src="images/virtualenv-setup.png" alt="Virtual environment setup" width="80%">
 
-## 5. Install Required Forensic Tools on macOS
+## 5. Install Required Forensic Tools
+
+On macOS with Homebrew:
 
 ```bash
 brew install sleuthkit e2fsprogs
@@ -42,6 +44,13 @@ On Apple Silicon Macs, add `e2fsprogs` to your `PATH`:
 ```bash
 echo 'export PATH="$PATH:/opt/homebrew/opt/e2fsprogs/sbin:/opt/homebrew/opt/e2fsprogs/bin"' >> ~/.zshrc
 source ~/.zshrc
+```
+
+On Debian or Ubuntu with `apt`:
+
+```bash
+sudo apt update
+sudo apt install sleuthkit e2fsprogs
 ```
 
 ## 6. Verify Required Commands
@@ -71,7 +80,7 @@ Example:
 python3 compare.py /Volumes/Untitled/cm8148-capture/nvram-crypt.dd /Volumes/Untitled/cm8148-24.11.6-20261002T172320Z_completo/nvram-crypt.dd -o /tmp/report --allfiles
 ```
 
-![Comparison run](images/comparison-run.png)
+<img src="images/comparison-run.png" alt="Comparison run" width="100%">
 
 ## 8. Open the Generated Report
 
@@ -83,7 +92,7 @@ open /tmp/report/report.html
 
 You can also open the output folder manually and open `report.html` in a browser.
 
-![Generated report](images/report-example.png)
+<img src="images/report-example.png" alt="Generated report" width="100%">
 
 ## Report Contents
 
