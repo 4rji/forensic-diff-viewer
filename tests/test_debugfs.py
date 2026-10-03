@@ -1,10 +1,12 @@
 import os
+import struct
 import tempfile
 
 import pytest
 
 from forensic_compare.ext_inode import ExtFS
-from forensic_compare.tools.debugfs import XattrExtractor, parse_ea_list, split_batch
+from forensic_compare.tools.debugfs import (XattrExtractor, _ext4_acl_to_posix, parse_ea_list,
+                                            split_batch)
 from forensic_compare.tools.runner import ToolRunner
 from tests.conftest import require_tools
 from tests.fixtures.build import CAP_V2_NET_RAW, XATTR_BIN
@@ -45,6 +47,32 @@ def test_split_batch():
 def test_split_batch_rejects_text_before_first_echo():
     with pytest.raises(ValueError):
         split_batch("stray\ndebugfs: ea_list <12>\n")
+
+
+def _posix_acl(entries):
+    return struct.pack("<I", 2) + b"".join(struct.pack("<HHI", *e) for e in entries)
+
+
+# USER_OBJ rw-, USER 1000 r--, GROUP_OBJ r--, MASK r--, OTHER r--
+ACL_DISK = bytes.fromhex("01000000" "01000600" "02000400e8030000" "04000400" "10000400" "20000400")
+ACL_LIBEXT2FS = _posix_acl([(0x01, 6, 0), (0x02, 4, 1000), (0x04, 4, 0), (0x10, 4, 0),
+                            (0x20, 4, 0)])
+
+
+def test_ext4_acl_to_posix_matches_libext2fs_conversion():
+    assert _ext4_acl_to_posix(ACL_DISK) == ACL_LIBEXT2FS
+    assert _ext4_acl_to_posix(b"\x01\x00\x00\x00") == b"\x02\x00\x00\x00"
+
+
+@pytest.mark.parametrize("raw", [
+    b"",
+    b"\x02\x00\x00\x00",                       # wrong version
+    ACL_DISK[:-2],                             # truncated short entry
+    ACL_DISK[:10],                             # truncated USER entry
+    b"\x01\x00\x00\x00\x40\x00\x04\x00",       # unknown tag
+])
+def test_ext4_acl_to_posix_rejects_invalid(raw):
+    assert _ext4_acl_to_posix(raw) is None
 
 
 # ---- integration --------------------------------------------------------------------------
@@ -162,3 +190,37 @@ def test_bad_bitmap_checksum_does_not_block_xattrs(tmp_path, runner):
         f.write(bytes([b ^ 0x01]))
     r = _extract(runner, img, ["/plain"])
     assert r["/plain"].state == "absent", r["/plain"].reason
+
+
+@pytest.mark.integration
+def test_posix_acls_are_validated_against_on_disk_structure(tmp_path, runner):
+    """ea_list reports the compact on-disk ACL size; ea_get returns the POSIX xattr format."""
+    from tests.fixtures.build import _run, _tool, debugfs_w
+
+    require_tools("debugfs")
+    src = tmp_path / "src"
+    (src / "dir").mkdir(parents=True)
+    (src / "f").write_bytes(b"x")
+    (src / "bad").write_bytes(b"x")
+    img = tmp_path / "acl.img"
+    _run([_tool("mke2fs"), "-q", "-F", "-t", "ext4", "-b", "1024", "-I", "256",
+          "-d", str(src), str(img), "2048"])
+    kernel_acl = tmp_path / "acl.bin"  # as setfacl passes it: no qualifier -> ACL_UNDEFINED_ID
+    kernel_acl.write_bytes(_posix_acl([(0x01, 6, 0xFFFFFFFF), (0x02, 4, 1000),
+                                       (0x04, 4, 0xFFFFFFFF), (0x10, 4, 0xFFFFFFFF),
+                                       (0x20, 4, 0xFFFFFFFF)]))
+    bad_acl = tmp_path / "bad.bin"
+    bad_acl.write_bytes(b"\x01\x00\x00\x00\x40\x00\x04\x00")
+    debugfs_w(img, [f"ea_set -f {kernel_acl} /f system.posix_acl_access",
+                    f"ea_set -f {kernel_acl} /dir system.posix_acl_access",
+                    f"ea_set -f {kernel_acl} /dir system.posix_acl_default",
+                    "ea_set /dir user.note hi",
+                    f"ea_set -r -f {bad_acl} /bad system.posix_acl_access"], tmp_path)
+    r = _extract(runner, img, ["/f", "/dir", "/bad"])
+    assert r["/f"].state == "ok", r["/f"].reason
+    assert r["/f"].value == {"system.posix_acl_access": {"hex": ACL_LIBEXT2FS.hex(),
+                                                         "size": len(ACL_LIBEXT2FS)}}
+    assert r["/dir"].state == "ok", r["/dir"].reason
+    assert set(r["/dir"].value) == {"system.posix_acl_access", "system.posix_acl_default",
+                                    "user.note"}
+    assert r["/bad"].state == "error"

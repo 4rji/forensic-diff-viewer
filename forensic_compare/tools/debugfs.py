@@ -9,13 +9,16 @@ agrees with the independent structural parse (``xattr_struct``), because debugfs
 silently drop attributes (e.g. a corrupt EA block yields empty output and exit 0). Values are
 fetched with ``ea_get -f`` into a private temporary directory and accepted only when no
 problem diagnostic was raised and the byte count equals the enumerated size; values stored
-inline are also compared byte-for-byte with the structural parse.
+inline are also compared byte-for-byte with the structural parse. POSIX ACLs are the exception:
+``ea_list`` reports their compact on-disk size while ``ea_get`` returns them converted to the
+POSIX xattr format, so the structural value is converted the same way before both checks.
 """
 from __future__ import annotations
 
 import os
 import re
 import shutil
+import struct
 import tempfile
 from pathlib import Path
 
@@ -26,6 +29,32 @@ from ..xattr_struct import parse_xattrs
 _ENTRY = re.compile(r"^  (.+?) \((\d+)\)(?: = .*)?$")
 _ECHO = "debugfs: "
 _SAFE_NAME = re.compile(r"^[\x21-\x7e]+$")
+_ACL_NAMES = ("system.posix_acl_access", "system.posix_acl_default")
+_ACL_SHORT_TAGS = {0x01, 0x04, 0x10, 0x20}  # USER_OBJ, GROUP_OBJ, MASK, OTHER: 4 bytes on-disk
+
+
+def _ext4_acl_to_posix(raw: bytes):
+    """ext4 on-disk ACL (v1, compact) -> POSIX xattr format (v2, 8 bytes/entry). None if invalid.
+
+    Mirrors libext2fs, which writes id 0 (not the kernel's ACL_UNDEFINED_ID) for short entries.
+    """
+    if len(raw) < 4 or struct.unpack_from("<I", raw, 0)[0] != 1:
+        return None
+    out, pos = [struct.pack("<I", 2)], 4
+    while pos < len(raw):
+        if pos + 4 > len(raw):
+            return None
+        tag, perm = struct.unpack_from("<HH", raw, pos)
+        if tag in _ACL_SHORT_TAGS:
+            ident, pos = 0, pos + 4
+        elif tag in (0x02, 0x08):  # USER, GROUP
+            if pos + 8 > len(raw):
+                return None
+            ident, pos = struct.unpack_from("<I", raw, pos + 4)[0], pos + 8
+        else:
+            return None
+        out.append(struct.pack("<HHI", tag, perm, ident))
+    return b"".join(out)
 
 
 def parse_ea_list(out: str) -> list[tuple[str, int]]:
@@ -203,16 +232,23 @@ class XattrExtractor:
         except OSError as exc:
             results[ino] = Assessed.error(f"ea_get {name} produced no output: {exc}", res.log_id)
             return
-        if len(data) != size:
+        expected_data, expected_size = structural, size
+        if name in _ACL_NAMES and structural is not None:
+            expected_data = _ext4_acl_to_posix(structural)
+            if expected_data is None:
+                results[ino] = Assessed.error(f"{name}: on-disk ACL is malformed", res.log_id)
+                return
+            expected_size = len(expected_data)
+        if len(data) != expected_size:
             results[ino] = Assessed.error(
-                f"ea_get {name} returned {len(data)} bytes, expected {size}", res.log_id)
+                f"ea_get {name} returned {len(data)} bytes, expected {expected_size}", res.log_id)
             return
-        if structural is not None and data != structural:
+        if expected_data is not None and data != expected_data:
             results[ino] = Assessed.error(f"ea_get {name} value differs from on-disk structure",
                                           res.log_id)
             return
         current = results.setdefault(ino, Assessed.ok({}))
-        current.value[name] = {"hex": data.hex(), "size": size}
+        current.value[name] = {"hex": data.hex(), "size": len(data)}
 
 
 def _unlink(path: Path):
