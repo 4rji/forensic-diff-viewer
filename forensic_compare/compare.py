@@ -42,7 +42,8 @@ from forensic_compare.integrity import (  # noqa: E402
 from forensic_compare.manifest import save_manifest  # noqa: E402
 from forensic_compare.pipeline import analyze_all  # noqa: E402
 from forensic_compare.progress import Progress  # noqa: E402
-from forensic_compare.report import RunContext, build_comparison, render_html  # noqa: E402
+from forensic_compare.report import (RunContext, build_comparison, load_logo,  # noqa: E402
+                                     render_html)
 from forensic_compare.rules import RulesError, load_rules  # noqa: E402
 from forensic_compare.textdiff import build_diffs  # noqa: E402
 from forensic_compare.tools.runner import ToolRunner  # noqa: E402
@@ -219,6 +220,11 @@ def main(argv=None, *, _hooks=None) -> int:
     except (ValueError, OutputError, RulesError, OSError) as exc:
         print(f"error: {exc}", file=err)
         return EXIT_FATAL
+    try:
+        args.logo = load_logo()
+    except (ValueError, OSError) as exc:  # cosmetic: never block an analysis over the logo
+        print(f"warning: no logo in the report: {exc}", file=err)
+        args.logo = None
 
     try:
         command = ["compare.py"] + [str(a) for a in (sys.argv[1:] if argv is None else argv)]
@@ -311,7 +317,7 @@ def _run(args, pairing, ruleset, out, hooks, command) -> int:
     )
     comparison = build_comparison(run)
     writer.write_text("comparison.json", json.dumps(comparison, ensure_ascii=False, indent=1))
-    writer.write_text("report.html", render_html(comparison))
+    writer.write_text("report.html", render_html(comparison, logo=args.logo))
     writer.finish()
 
     code = EXIT_OK if complete and overall in ("verified", NOT_CHECKED) else EXIT_INCOMPLETE

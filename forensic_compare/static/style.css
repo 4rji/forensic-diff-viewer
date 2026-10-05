@@ -90,21 +90,22 @@ select, input[type="search"] {
 .noscript { padding: 16px; }
 
 /* ---- layout ------------------------------------------------------------------------------ */
-.app { min-height: 100vh; display: flex; flex-direction: column; }
+.app { min-height: 100vh; display: flex; flex-direction: column; --topbar-h: 52px; }
+.app.has-logo { --topbar-h: 65px; }
 .topbar {
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 5;
 }
+.logo { display: block; flex: none; height: 44px; width: auto; max-width: min(320px, 70vw); object-fit: contain; }
 .brand { font-weight: 700; letter-spacing: .2px; }
 .brand small { font-weight: 400; color: var(--muted); margin-left: 6px; }
-.case { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+.case { display: flex; gap: 2px 14px; flex-wrap: wrap; flex: 1 1 320px; min-width: 0; color: var(--muted); font-size: 13px; }
 .case b { color: var(--text); font-weight: 600; }
-.topbar .spacer { flex: 1; }
 .main { flex: 1; display: flex; min-height: 0; }
 .sidebar {
   width: 280px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
-  padding: 12px 8px; overflow-y: auto; max-height: calc(100vh - 52px); position: sticky; top: 52px;
+  padding: 12px 8px; overflow-y: auto; max-height: calc(100vh - var(--topbar-h)); position: sticky; top: var(--topbar-h);
 }
 .app.sidebar-collapsed .sidebar { display: none; }
 .content { flex: 1; min-width: 0; padding: 16px; }
@@ -221,7 +222,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
 
 @media (max-width: 900px) {
-  .sidebar { position: fixed; left: 0; top: 52px; bottom: 0; z-index: 6; max-height: none; box-shadow: 0 0 24px rgba(0,0,0,.25); }
+  .sidebar { position: fixed; left: 0; top: var(--topbar-h); bottom: 0; z-index: 6; max-height: none; box-shadow: 0 0 24px rgba(0,0,0,.25); }
   .split { flex-direction: column; }
   .detail { width: 100%; position: static; max-height: none; }
   .content { padding: 12px; }

@@ -270,8 +270,13 @@ Rule semantics:
 - **Detail panel:** golden vs current with every field and its assessment state, the
   differences highlighted, and rule coverage per difference.
 - **Theme:** light and dark.
+- **Logo:** `logo.png` at the repository root is embedded in the top-left of the top bar
+  (shown 44 px high, up to 320 px wide; a wide banner such as 1200×240 fits best). Replace it
+  with your own; PNG, JPEG, GIF, WebP or SVG content works under that name. Delete it for no
+  logo. An unreadable file prints a warning and the report is built without it.
 - **Security:** a CSP with exact hashes of the inline script and style, no network access, and
-  data rendered as text only. This is defense in depth, not a guarantee.
+  data rendered as text only. The CSP allows `data:` images only when a logo is embedded. This
+  is defense in depth, not a guarantee.
 
 Phase 2, decided but not yet implemented:
 
