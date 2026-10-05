@@ -1,9 +1,23 @@
 # forensic_compare
 
-Compares a **golden** (baseline) capture with a **current** capture of the same Linux device
-and produces a self-contained HTML report. The comparison runs at the partition, filesystem,
-file and metadata level. A byte-by-byte diff of whole images is only used as a last resort,
-for sources the tool cannot analyse structurally, and the report labels it as such.
+forensic_compare is a read-only tool that shows what changed on a Linux device between two
+forensic captures. It takes a **golden** (baseline) capture and a **current** capture of the
+same device, either as two capture directories or as a single pair of image files, and
+compares them structurally with The Sleuth Kit and `debugfs`: partition layouts, ext2/3/4
+filesystems, and, for every file, its content hash, size, permissions, ownership, mtime,
+symlink target, extended attributes and Linux capabilities. Images are never mounted or
+written to. A byte-by-byte diff of whole images is only used as a last resort, for sources the
+tool cannot analyse structurally, and the report labels it as such.
+
+The result is a self-contained HTML report that opens straight from disk, with no server and
+no network access, plus a machine-readable `comparison.json` and a log of every external
+command the tool ran. Each file gets a status (modified, added, deleted, metadata changed,
+unchanged or incomplete) and a review priority that puts sensitive changes first, such as
+SUID/SGID bits, capabilities, new symlinks and changed binaries or scripts. Analysts can
+supply expected-change rules to mark known differences, such as logs or configuration, and
+modified text files get side-by-side line diffs. The tool reports differences as facts, not
+verdicts: it never decides that a device is compromised, and anything it could not read or
+verify is shown as *not assessed*, never as unchanged.
 
 Principles:
 
@@ -40,7 +54,7 @@ python forensic_compare/compare.py golden/ current/ -o report/
 python forensic_compare/compare.py clean.dd current.dd -o report/
 
 # options
-  --rules FILE      expected-change rules (see expected_changes.example.yaml)
+  --rules FILE      expected-change rules (see forensic_compare/expected_changes.example.yaml)
   --jobs N          concurrent tool processes (default min(4, CPUs))
   --timeout SEC     per-command timeout (default 600)
   --force           write into a non-empty output dir (removes only the previous run's files)
@@ -232,8 +246,8 @@ No signature validity is checked.
 
 ## Expected-change rules
 
-See `expected_changes.example.yaml`. The example is illustrative only and contains no enabled
-rules.
+See `forensic_compare/expected_changes.example.yaml`. The example is illustrative only and
+contains no enabled rules.
 
 Rule semantics:
 
@@ -353,7 +367,7 @@ captures and confirm:
 - [ ] The encryption format observed on mmcblk0 p3/p5/p6, and that the declared `partitions:`
       entries match.
 - [ ] The real `fls`, `fsstat` and `debugfs` diagnostics. Extend
-      `tools/diagnostics.py` only with understood messages.
+      `forensic_compare/tools/diagnostics.py` only with understood messages.
 - [ ] No unexpected *not assessed* xattr results on real kernel-written inodes. The
       structural check treats a non-empty in-inode EA area without the EA magic as an error.
 - [ ] Runtime and report size on the real NVRAM image.
