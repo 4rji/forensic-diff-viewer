@@ -6,6 +6,9 @@
 
   var DATA = JSON.parse(document.getElementById('data').textContent);
   var root = document.getElementById('app');
+  // optional build-time banner (not part of the data); render() moves it into the top bar
+  var LOGO = document.getElementById('logo');
+  if (LOGO) LOGO.hidden = false;
 
   // ---- storage (per-viewer conveniences only; failures fall back to defaults) -------------
   function load(key, dflt) {
@@ -177,6 +180,7 @@
       integ.overall === 'failed' ? 'Integrity FAILED' :
       integ.overall === 'not-checked' ? 'Integrity: not checked by this run' : 'Integrity: stable, unverified';
     return el('header', { class: 'topbar' },
+      LOGO,
       el('button', {
         'aria-label': 'Toggle sidebar', title: 'Toggle sidebar',
         onclick: function () { state.sidebarCollapsed = !state.sidebarCollapsed; save('sidebarCollapsed', state.sidebarCollapsed); render(); }
@@ -186,7 +190,6 @@
         el('span', null, 'Model ', el('b', null, capField('golden', 'device_model')), ' / ', el('b', null, capField('current', 'device_model'))),
         el('span', null, 'Golden captured ', el('b', null, capField('golden', 'captured_at'))),
         el('span', null, 'Current captured ', el('b', null, capField('current', 'captured_at')))),
-      el('span', { class: 'spacer' }),
       el('span', { class: 'chip ' + cls, id: 'integrity-badge', title: integ.disclaimer || '' }, label),
       el('button', {
         id: 'theme-toggle', 'aria-label': 'Toggle light/dark theme',
@@ -775,7 +778,7 @@
   function render() {
     clear(root);
     sectionBody = null;
-    root.className = 'app' + (state.sidebarCollapsed ? ' sidebar-collapsed' : '');
+    root.className = 'app' + (LOGO ? ' has-logo' : '') + (state.sidebarCollapsed ? ' sidebar-collapsed' : '');
     root.appendChild(renderTopbar());
     root.appendChild(renderBanners());
     var content = el('main', { class: 'content', id: 'content' });
