@@ -37,12 +37,104 @@ Principles:
   not change during analysis. It does not establish that the firmware is authentic or free of
   compromise.
 
-## Install
+## Quick start (macOS or Linux)
+
+Setup and a first run, step by step. The same guide is also available as
+[`forensic_diff_viewer_guide.html`](forensic_diff_viewer_guide.html).
+
+### Project structure
+
+<img src="images/project-structure.png" alt="Project structure" width="50%">
+
+### 1. Extract the Project
+
+Extract the `forensic-diff-viewer.zip` archive and open a terminal in the extracted project directory.
+
+### 2. Create a Python Virtual Environment
 
 ```bash
-sudo apt install sleuthkit e2fsprogs           # mmls, fsstat, fls, icat, debugfs (>= TSK 4.12)
-python3 -m pip install -r forensic_compare/requirements.txt   # PyYAML
+virtualenv .venv
+source .venv/bin/activate
 ```
+
+### 3. Enter the Application Directory
+
+```bash
+cd forensic_compare
+```
+
+### 4. Install Python Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+<img src="images/virtualenv-setup.png" alt="Virtual environment setup" width="80%">
+
+### 5. Install Required Forensic Tools
+
+The Sleuth Kit 4.12 or later is required (`mmls`, `fsstat`, `fls`, `icat`) plus `debugfs` from e2fsprogs.
+
+On macOS with Homebrew:
+
+```bash
+brew install sleuthkit e2fsprogs
+```
+
+On Apple Silicon Macs, add `e2fsprogs` to your `PATH`:
+
+```bash
+echo 'export PATH="$PATH:/opt/homebrew/opt/e2fsprogs/sbin:/opt/homebrew/opt/e2fsprogs/bin"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+On Debian or Ubuntu with `apt`:
+
+```bash
+sudo apt update
+sudo apt install sleuthkit e2fsprogs
+```
+
+### 6. Verify Required Commands
+
+Run these checks on macOS or Linux:
+
+```bash
+which fls
+which debugfs
+which fsstat
+which icat
+```
+
+Each command should return a valid executable path.
+
+### 7. Run a Comparison
+
+General syntax:
+
+```bash
+python3 compare.py File1 File2 -o /destination_report --allfiles
+```
+
+Example:
+
+```bash
+python3 compare.py /Volumes/Untitled/cm8148-capture/nvram-crypt.dd /Volumes/Untitled/cm8148-24.11.6-20261002T172320Z_completo/nvram-crypt.dd -o /tmp/report --allfiles
+```
+
+<img src="images/comparison-run.png" alt="Comparison run" width="100%">
+
+### 8. Open the Generated Report
+
+On macOS:
+
+```bash
+open /tmp/report/report.html
+```
+
+You can also open the output folder manually and open `report.html` in a browser.
+
+<img src="images/report-example.png" alt="Generated report" width="100%">
 
 ## Usage
 
