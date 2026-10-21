@@ -111,6 +111,7 @@
     selected: null,
     bannersCollapsed: load('bannersCollapsed', false),
     sidebarCollapsed: load('sidebarCollapsed', false),
+    detailLayout: load('detailLayout', 'below'),  // entry details: 'below' the table or 'side'
     deviceDiffOnly: false
   };
   var sectionsById = {};
@@ -654,7 +655,13 @@
   }
   function renderDetail(e) {
     var box = el('aside', { class: 'detail', id: 'detail', 'aria-label': 'Entry details' });
-    box.appendChild(el('button', { class: 'close', 'aria-label': 'Close details', onclick: function () { state.selected = null; renderSectionBody(); } }, '✕'));
+    var below = state.detailLayout === 'below';
+    box.appendChild(el('div', { class: 'detail-actions' },
+      el('button', {
+        id: 'detail-layout', title: below ? 'Show the details beside the table' : 'Show the details below the table, full width',
+        onclick: function () { state.detailLayout = below ? 'side' : 'below'; save('detailLayout', state.detailLayout); renderSectionBody(); }
+      }, below ? '⇥ Beside' : '⇩ Below'),
+      el('button', { 'aria-label': 'Close details', onclick: function () { state.selected = null; renderSectionBody(); } }, '✕')));
     box.appendChild(el('h3', null, e.path));
     box.appendChild(el('div', { class: 'chips' }, statusChip(e.status), el('span', { class: 'chip p' + e.priority }, PRIORITY[e.priority] || ''),
       e.kind ? el('span', { class: 'chip' }, e.kind) : null,
@@ -666,7 +673,7 @@
       box.appendChild(el('div', { class: 'panel' }, el('b', { class: 'na' }, 'Not fully assessed'), list(e.incomplete_reasons)));
     }
     var diffFields = e.diffs.map(function (d) { return d.field; });
-    var t = el('table', { class: 'kv' });
+    var t = el('table', { class: 'kv detail-kv' });
     t.appendChild(el('thead', null, el('tr', null, el('th', null, 'Field'), el('th', null, 'Golden'), el('th', null, 'Current'))));
     var tb = el('tbody');
     DETAIL_FIELDS.forEach(function (fd) {
@@ -716,7 +723,8 @@
       el('button', { id: 'reset-filters', onclick: function () { state.filters = Object.assign({}, DEFAULT_FILTERS); state.selected = null; render(); } }, 'Reset filters')));
     sectionBody.appendChild(renderPager(rows.length));
     var page = rows.slice(start, start + state.pageSize);
-    var split = el('div', { class: 'split' }, renderTable(section, page));
+    var split = el('div', { class: 'split' + (state.detailLayout === 'below' ? ' stacked' : '') + (state.selected ? ' has-detail' : '') },
+      renderTable(section, page));
     if (state.selected) split.appendChild(renderDetail(state.selected));
     sectionBody.appendChild(split);
   }

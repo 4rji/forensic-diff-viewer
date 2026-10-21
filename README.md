@@ -327,7 +327,9 @@ Rule semantics:
   search by path, name or hash (`/` to focus), "Displaying X of Y entries", and Reset filters.
 - **Table:** sortable columns and pagination; only the visible page is in the DOM.
 - **Detail panel:** golden vs current with every field and its assessment state, the
-  differences highlighted, and rule coverage per difference.
+  differences highlighted, and rule coverage per difference. It opens below the table, as a
+  full-width drawer docked at the bottom of the window (room for full SHA-256 hashes), or
+  beside it; *⇥ Beside* / *⇩ Below* switches, and the browser remembers the choice.
 - **Theme:** light and dark.
 - **Logo:** `logo.png` at the repository root is embedded in the top-left of the top bar
   (shown 44 px high, up to 320 px wide; a wide banner such as 1200×240 fits best). Replace it
@@ -342,7 +344,6 @@ Phase 2, decided but not yet implemented:
 - column chooser;
 - font controls and monospace option;
 - zoom, Fit to Page and Full Screen;
-- vertical/horizontal layout;
 - card view on narrow screens;
 - virtualized rendering;
 

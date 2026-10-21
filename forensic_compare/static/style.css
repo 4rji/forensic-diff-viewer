@@ -301,12 +301,29 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
 .detail tr.diff td.v { background: var(--diff-bg); }
 .na { color: var(--st-incomplete); font-style: italic; }
 .hex { font-family: var(--mono); font-size: 11.5px; word-break: break-all; color: var(--muted); }
-.close { float: right; }
+.detail-actions { float: right; display: flex; gap: 6px; margin: 0 0 6px 10px; }
+.detail-actions button { padding: 2px 8px; font-size: 12.5px; }
+/* details below the table: a full-width drawer docked at the bottom of the window, aligned with
+   the content area; the table gets room at its end so its last rows can scroll above it */
+.split.stacked { flex-direction: column; align-items: stretch; }
+.split.stacked.has-detail { padding-bottom: 50vh; }
+.split.stacked .detail {
+  position: fixed; left: 296px; right: 16px; bottom: 0; top: auto; width: auto; max-height: 48vh; z-index: 4;
+  border-radius: 10px 10px 0 0; border-bottom: none; border-top: 2px solid var(--accent);
+  box-shadow: 0 -10px 30px rgba(15, 23, 42, .18);
+}
+.app.sidebar-collapsed .split.stacked .detail { left: 16px; }
+.split.stacked .detail-kv { table-layout: fixed; }
+.split.stacked .detail-kv thead th { width: auto; }
+.split.stacked .detail-kv thead th:first-child { width: 150px; }
+.split.stacked .detail-kv tbody th { white-space: normal; }
+.split.stacked .detail td.v { font-size: 11.5px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
 
 @media (max-width: 900px) {
   .sidebar { position: fixed; left: 0; top: var(--topbar-h); bottom: 0; z-index: 6; max-height: none; box-shadow: 0 0 24px rgba(0,0,0,.25); }
   .split { flex-direction: column; }
+  .app .split.stacked .detail, .app.sidebar-collapsed .split.stacked .detail { left: 0; right: 0; max-height: 60vh; }
   .detail { width: 100%; position: static; max-height: none; }
   .content { padding: 12px; }
 }
