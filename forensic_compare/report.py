@@ -42,6 +42,7 @@ class RunContext:
     completeness: dict
     notices: list = field(default_factory=list)
     options: dict = field(default_factory=dict)  # e.g. {"text_diffs": bool}
+    device_info: dict = field(default_factory=dict)  # device-info.txt shown as text, unparsed
 
 
 def build_comparison(run: RunContext) -> dict:

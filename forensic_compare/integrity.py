@@ -11,6 +11,11 @@ Verdicts per image:
 
 "Verified" describes image integrity against the supplied checksum; it does not establish that
 the firmware is authentic or free of compromise.
+
+A stdin entry (``<hash>  -``, from ``dd … | sha256sum``) names no file. It is used only in a
+per-image checksum file whose sole entry it is, for the single image the file is named after
+(``x.dd.sha256``, ``x.sha256`` or ``x.raw.sha256`` → ``x.dd``). A wrong association can only
+produce a mismatch (failed), never a false ``verified``.
 """
 from __future__ import annotations
 
@@ -20,7 +25,10 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .discovery import IMAGE_EXTENSIONS
+
 CHUNK = 4 << 20
+CHECKSUM_SUFFIXES = (".sha256sum", ".sha256")
 DISCLAIMER = ("Verified describes image integrity against the supplied checksum; it does not "
               "establish that the firmware is authentic or free of compromise.")
 NOT_CHECKED = "not-checked"
@@ -46,8 +54,9 @@ def sha256_file(path: Path, on_bytes=None) -> str:
 
 
 def parse_checksum_file(p: Path):
-    """Return (entries {basename: hex}, malformed [line], ignored [(line, reason)])."""
-    entries, malformed, ignored = {}, [], []
+    """Return (entries {basename: hex}, malformed [line], ignored [(line, reason)],
+    stdin [(line, hex)])."""
+    entries, malformed, ignored, stdin = {}, [], [], []
     for raw in Path(p).read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw.rstrip("\r")
         if not line.strip() or line.lstrip().startswith("#"):
@@ -58,14 +67,31 @@ def parse_checksum_file(p: Path):
             continue
         digest, _mode, name = m.group(1).lower(), m.group(2), m.group(3)
         if name == "-":
-            ignored.append((line[:200], "stdin marker (not a file)"))
+            stdin.append((line[:200], digest))
         elif "/" in name or name in (".", ".."):
             ignored.append((line[:200], "not a basename in this directory"))
         elif name in entries and entries[name] != digest:
             entries[name] = None  # conflicting within one file
         else:
             entries[name] = digest
-    return entries, malformed, ignored
+    return entries, malformed, ignored, stdin
+
+
+def image_named_like(checksum_name: str, images) -> str | None:
+    """The single image a per-image checksum file is named after, else None.
+
+    ``x.dd.sha256`` → ``x.dd``; ``x.sha256`` and ``x.raw.sha256`` → the one image whose name
+    without its extension is ``x``. ``SHA256SUMS`` names no image.
+    """
+    base = next((checksum_name[:-len(s)] for s in CHECKSUM_SUFFIXES
+                 if checksum_name.endswith(s)), "")
+    if not base:
+        return None
+    if base in images:
+        return base
+    stem = base.rsplit(".", 1)[0] if base.endswith(IMAGE_EXTENSIONS) else base
+    matches = [n for n in images if n.rsplit(".", 1)[0] == stem]
+    return matches[0] if len(matches) == 1 else None
 
 
 def expected_checksums(listing):
@@ -76,7 +102,7 @@ def expected_checksums(listing):
     expected: dict[str, list] = {}
     report = {}
     for f in listing.checksum_files:
-        entries, malformed, ignored = parse_checksum_file(f)
+        entries, malformed, ignored, stdin = parse_checksum_file(f)
         used, unused = [], []
         for name, digest in entries.items():
             if name in listing.images:
@@ -84,8 +110,21 @@ def expected_checksums(listing):
                 used.append(name)
             else:
                 unused.append(name)
+        stdin_image = None
+        if stdin:
+            target = image_named_like(f.name, listing.images)
+            if len(stdin) == 1 and not entries and target:
+                stdin_image = target
+                expected.setdefault(target, []).append((stdin[0][1], f.name))
+                used.append(target)
+            else:
+                why = ("several stdin entries" if len(stdin) > 1 else
+                       "the file also lists named entries" if entries else
+                       "no single image is named like this file")
+                ignored += [(line, f"stdin marker (not a file): {why}") for line, _ in stdin]
         report[f.name] = {"used": sorted(used), "not_matching_an_image": sorted(unused),
-                          "malformed": malformed, "ignored": [list(x) for x in ignored]}
+                          "malformed": malformed, "ignored": [list(x) for x in ignored],
+                          "stdin_image": stdin_image}
     return expected, report
 
 

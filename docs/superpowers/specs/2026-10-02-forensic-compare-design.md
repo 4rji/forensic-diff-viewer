@@ -158,7 +158,7 @@ Module boundaries:
   `.partial`.
 - **Checksum manifest:** `*.sha256`, `*.sha256sum` or `SHA256SUMS`, **excluding** `*.received.sha256`.
 - **Supporting:** `capture.yaml` and `device-info.txt`. They are copied verbatim with their SHA-256.
-  `device-info.txt` is never parsed.
+  `device-info.txt` is never parsed; the report shows it as text (Device info view).
 - **Other:** `*.received.sha256`, `*.partial`, logs and anything else are listed in the report as
   "not used" with the reason.
 
@@ -177,7 +177,9 @@ Module boundaries:
 - **Manifest parsing:** `sha256sum` format, one `<64 hex><space><space|*><name>` per line.
   - An entry is used only if `<name>` is a basename equal to a candidate image in the same
     directory.
-  - Entries named `-` (stdin marker, e.g. `*-`) are always ignored.
+  - Entries named `-` (stdin marker, e.g. `*-`) are ignored, except as the sole entry of a
+    per-image checksum file (`x.dd.sha256`, `x.sha256`, `x.raw.sha256`), where they apply to the
+    single image the file is named after. A wrong association can only produce FAILED.
   - Malformed lines are reported.
   - If two manifests disagree about the same image, the result is FAILED with the reason
     "conflicting checksums".

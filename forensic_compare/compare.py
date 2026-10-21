@@ -30,6 +30,7 @@ if __package__ in (None, ""):  # executed as a script: make the package importab
 
 from forensic_compare import __version__  # noqa: E402
 from forensic_compare.capture_meta import load_capture  # noqa: E402
+from forensic_compare.device_info import build_device_info  # noqa: E402
 from forensic_compare.discovery import pair_inputs  # noqa: E402
 from forensic_compare.integrity import (  # noqa: E402
     DISCLAIMER,
@@ -314,6 +315,7 @@ def _run(args, pairing, ruleset, out, hooks, command) -> int:
         notices=result.notices,
         options={"text_diffs": bool(args.text_diffs), "all_files": bool(args.all_files),
                  "verify_integrity": bool(args.verify_integrity)},
+        device_info=build_device_info(pairing.golden_listing, pairing.current_listing),
     )
     comparison = build_comparison(run)
     writer.write_text("comparison.json", json.dumps(comparison, ensure_ascii=False, indent=1))

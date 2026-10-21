@@ -25,6 +25,10 @@
   --warn: #9a6700;
   --warn-bg: #fff8e1;
   --diff-bg: #fff3c4;
+  --line-del: #ffebe9;
+  --line-del-hl: #ffc1ba;
+  --line-add: #dafbe1;
+  --line-add-hl: #aceebb;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --radius: 6px;
@@ -56,6 +60,10 @@
   --warn: #e3b341;
   --warn-bg: #33290f;
   --diff-bg: #4a3b0c;
+  --line-del: #3c1618;
+  --line-del-hl: #7d2a2a;
+  --line-add: #12261e;
+  --line-add-hl: #1f5f33;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -228,5 +236,23 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
   .content { padding: 12px; }
 }
 .textdiff { margin: 12px 0; }
+
+/* ---- device info ------------------------------------------------------------------------- */
+.devinfo { table-layout: fixed; font: 12px/1.5 var(--mono); }
+.devinfo col.n { width: 4.5em; }
+.devinfo tbody tr { cursor: default; }
+.devinfo tbody tr:hover { background: none; }
+.devinfo td { padding: 0 6px; border-bottom: none; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 8; }
+.devinfo td.n { color: var(--muted); text-align: right; user-select: none; border-right: 1px solid var(--border); }
+.devinfo td.del { background: var(--line-del); }
+.devinfo td.add { background: var(--line-add); }
+.devinfo td.del mark { background: var(--line-del-hl); color: inherit; }
+.devinfo td.add mark { background: var(--line-add-hl); color: inherit; }
+.devinfo td.empty { background: var(--panel-2); }
+.devinfo tr.sec td {
+  padding: 10px 8px 3px; border-bottom: 1px solid var(--border); background: var(--panel);
+  font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .6px; color: var(--accent);
+}
+.devinfo tr.sec:first-child td { padding-top: 4px; }
 a.btn { display: inline-block; padding: 4px 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius); text-decoration: none; color: var(--accent); font-weight: 600; }
 a.btn:hover { text-decoration: underline; }

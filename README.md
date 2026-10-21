@@ -105,7 +105,7 @@ golden/
 ├── mtdblock0.bin
 ├── SHA256SUMS                  # used with --verify-integrity; *.sha256 / *.sha256sum also accepted
 ├── capture.yaml                # optional, written by the analyst
-└── device-info.txt             # optional; copied verbatim, never parsed
+└── device-info.txt             # optional; copied verbatim and shown in the report, never parsed
 ```
 
 The following files are listed as "not used":
@@ -114,8 +114,19 @@ The following files are listed as "not used":
 - `*.received.sha256`, which is a stream checksum, not an image manifest;
 - logs and anything else.
 
-In checksum manifests, entries named `-` (stdin) are ignored, and only entries that name an
-image in the same directory are used.
+In checksum manifests, only entries that name an image in the same directory are used. An
+entry named `-` (stdin, as written by `dd … | sha256sum`) names no file, so it is used only in
+a per-image checksum file whose sole entry it is, for the one image the file is named after:
+
+| Checksum file | Image |
+|---|---|
+| `mmcblk0.dd.sha256` | `mmcblk0.dd` |
+| `mtdblock0.sha256` | `mtdblock0.bin` (the only image named `mtdblock0.*`) |
+| `config-active-crypt.raw.sha256` | `config-active-crypt.dd` (the only image named `config-active-crypt.*`) |
+
+When the name matches no image or several, or the file has other entries, the `-` entry is
+ignored and the report says why. A wrong association can only give a mismatch (FAILED), never
+a false *verified*. `SHA256SUMS` entries must always name the image.
 
 How each image is handled:
 
@@ -275,7 +286,12 @@ Rule semantics:
   Incomplete analysis. They can be collapsed but never dismissed.
 - **Start view:** the report opens on the file table of the first filesystem section.
 - **Sidebar:** per-source sections, plus disk partitions, image-level and unmatched sources,
-  integrity, capture metadata, rules, files not used, and tools.
+  integrity, capture metadata, device info, rules, files not used, and tools.
+- **Device info:** each side's `device-info.txt` as captured, side by side, with the lines that
+  differ highlighted and an *Only differing lines* filter. Section labels (date, `uname -a`,
+  `/proc/partitions`, `lsblk`, `blkid`) are recognised from the command output format, only to
+  make the text easier to read; no value in the file is used by any check. Up to 1 MiB per side
+  is shown; the full file is in `supporting/`.
 - **Summary cards:** computed before filters are applied.
 - **Filters:** status filters (All, Modified, Added, Deleted, Metadata Changed, Unchanged,
   Incomplete), *Hide unchanged* (on by default), *Hide fully expected*, *Sensitive only*,
