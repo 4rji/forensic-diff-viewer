@@ -110,7 +110,8 @@
     pageSize: load('pageSize', 200),
     selected: null,
     bannersCollapsed: load('bannersCollapsed', false),
-    sidebarCollapsed: load('sidebarCollapsed', false)
+    sidebarCollapsed: load('sidebarCollapsed', false),
+    deviceDiffOnly: false
   };
   var sectionsById = {};
   (DATA.sources || []).forEach(function (s) { sectionsById[s.id] = s; });
@@ -236,6 +237,7 @@
     nav.appendChild(el('div', { class: 'nav-group' }, el('h3', null, 'Case'),
       navItem({ type: 'integrity' }, 'Integrity'),
       navItem({ type: 'capture' }, 'Capture metadata'),
+      navItem({ type: 'device' }, 'Device info'),
       navItem({ type: 'rules' }, 'Expected-change rules'),
       navItem({ type: 'files' }, 'Files not used'),
       navItem({ type: 'tools' }, 'Tools & run')));
@@ -711,7 +713,8 @@
     ['golden', 'current'].forEach(function (side) {
       var r = (i.checksum_files || {})[side] || {};
       Object.keys(r).forEach(function (f) {
-        files.push([side, f, (r[f].used || []).join(', '), (r[f].malformed || []).length + ' malformed, ' + (r[f].ignored || []).length + ' ignored']);
+        var used = r[f].stdin_image ? r[f].stdin_image + ' (stdin entry "-", matched by the file name)' : (r[f].used || []).join(', ');
+        files.push([side, f, used, (r[f].malformed || []).length + ' malformed, ' + (r[f].ignored || []).length + ' ignored']);
       });
     });
     return el('div', null, el('div', { class: 'section-head' }, el('h2', null, 'Integrity'), verdictChip({ status: i.overall })),
@@ -729,9 +732,77 @@
         c.present ? el('p', { class: 'muted mono' }, 'Read from ' + (c.path || 'capture.yaml')) : el('p', { class: 'muted' }, 'No capture file (capture.yaml or <image>.capture.yaml): every value is not recorded.'),
         list(c.errors),
         rows.length ? simpleTable(['Field', 'Value (provenance)'], rows) : null,
-        el('h4', null, 'Supporting files (copied verbatim to supporting/' + side + '/; device-info.txt is never parsed)'),
+        el('h4', null, 'Supporting files (copied verbatim to supporting/' + side + '/; device-info.txt is shown under Device info and never parsed)'),
         simpleTable(['File', 'SHA-256', 'Size'], (c.supporting || []).map(function (s) { return [s.name, el('span', { class: 'hex' }, s.sha256), String(s.size)]; }))));
     });
+    return box;
+  }
+  // text with the character ranges [[start, end], …] (code points) wrapped in <mark>
+  function markedText(text, spans) {
+    if (!spans || !spans.length) return text;
+    var chars = Array.from(text), out = [], pos = 0;
+    spans.forEach(function (s) {
+      if (s[0] > pos) out.push(chars.slice(pos, s[0]).join(''));
+      out.push(el('mark', null, chars.slice(s[0], s[1]).join('')));
+      pos = s[1];
+    });
+    if (pos < chars.length) out.push(chars.slice(pos).join(''));
+    return out;
+  }
+  function renderDeviceInfo() {
+    var d = DATA.device_info || {};
+    var box = el('div', null, el('div', { class: 'section-head' }, el('h2', null, 'Device info')));
+    box.appendChild(el('p', { class: 'muted' }, 'device-info.txt as captured, for reading only: no value in it is used by any check. ' +
+      'Section labels are recognised from the command output format. The full files are copied verbatim to supporting/golden/ and supporting/current/.'));
+    box.appendChild(simpleTable(['Side', 'File', 'SHA-256', 'Size'], ['golden', 'current'].map(function (side) {
+      var s = d[side] || {};
+      return [side === 'golden' ? 'Golden' : 'Current',
+        !s.present ? el('span', { class: 'muted' }, 'no device-info.txt') :
+          s.error ? el('span', { class: 'na' }, 'could not be read: ' + s.error) : el('span', { class: 'mono' }, s.path),
+        s.sha256 ? el('span', { class: 'hex' }, s.sha256) : '',
+        s.present && !s.error ? fmtSize(s.size) + (s.truncated ? ' — only the first 1 MiB is shown' : '') : ''];
+    })));
+    var rows = d.rows || [];
+    if (!rows.length) {
+      box.appendChild(el('p', { class: 'muted' }, d.layout === 'single' ? 'The file is empty.' : 'No readable device-info.txt in either capture.'));
+      return box;
+    }
+    var diff = d.layout === 'diff';
+    if (d.same_file) box.appendChild(el('p', { class: 'muted' }, 'Golden and current read the same file; it is shown once.'));
+    else if (!diff) box.appendChild(el('p', { class: 'muted' }, 'Only the ' + d.shown + ' capture has a device-info.txt.'));
+    if (diff) {
+      box.appendChild(el('div', { class: 'countline' },
+        el('span', null, d.differing ? d.differing + ' lines differ' : 'No differences'),
+        d.differing ? el('label', null, el('input', {
+          type: 'checkbox', id: 'device-diff-only', checked: state.deviceDiffOnly,
+          onchange: function (ev) { state.deviceDiffOnly = ev.target.checked; render(); }
+        }), ' Only differing lines') : null));
+    }
+    var cols = diff ? 4 : 2;
+    var t = el('table', { class: 'devinfo' + (diff ? ' sbs' : '') },
+      el('colgroup', null, diff ? [el('col', { class: 'n' }), el('col'), el('col', { class: 'n' }), el('col')] : [el('col', { class: 'n' }), el('col')]),
+      el('thead', null, el('tr', null, diff ? [el('th'), el('th', null, 'Golden'), el('th'), el('th', null, 'Current')] :
+        [el('th'), el('th', null, d.shown === 'golden' ? 'Golden' : 'Current')])));
+    var tb = el('tbody');
+    function cells(side, cls, spans) {
+      if (!side) return [el('td', { class: 'n empty' }), el('td', { class: 'empty' })];
+      return [el('td', { class: 'n' }, String(side[0])), el('td', { class: cls }, markedText(side[1], spans))];
+    }
+    var only = diff && state.deviceDiffOnly && d.differing, label = null, labelShown = false;
+    rows.forEach(function (r) {
+      if (r.label) { label = r.label; labelShown = false; }
+      if (only && r.op === 'equal') return;
+      if (label && !labelShown) {
+        tb.appendChild(el('tr', { class: 'sec' }, el('td', { colspan: cols }, label)));
+        labelShown = true;
+      }
+      var changed = r.op !== 'equal';
+      tb.appendChild(el('tr', null, diff ?
+        cells(r.g, changed ? 'del' : '', r.gm).concat(cells(r.c, changed ? 'add' : '', r.cm)) :
+        cells(r.line, '', null)));
+    });
+    t.appendChild(tb);
+    box.appendChild(el('div', { class: 'table-wrap' }, t));
     return box;
   }
   function renderRules() {
@@ -789,6 +860,7 @@
         s.kind === 'image-level' ? renderImageLevel(s) : renderUnavailable(s));
     } else if (v.type === 'integrity') content.appendChild(renderIntegrity());
     else if (v.type === 'capture') content.appendChild(renderCapture());
+    else if (v.type === 'device') content.appendChild(renderDeviceInfo());
     else if (v.type === 'rules') content.appendChild(renderRules());
     else if (v.type === 'files') content.appendChild(renderFiles());
     else if (v.type === 'tools') content.appendChild(renderTools());
