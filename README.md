@@ -59,8 +59,8 @@ python forensic_compare/compare.py clean.dd current.dd -o report/
   --timeout SEC     per-command timeout (default 600)
   --force           write into a non-empty output dir (removes only the previous run's files)
   --verify-integrity  hash every image before and after the analysis and check checksum files
-  --no-text-diffs   do not write the line diff pages for modified text files (see below)
-  --allfiles        also write a content page for every other text file (see below)
+  --no-text-diffs   do not write the line diff and file pages (see below)
+  --allfiles        also write a content page for unchanged and incomplete text files
   --quiet           no progress output
 ```
 
@@ -72,8 +72,7 @@ python forensic_compare/compare.py clean.dd current.dd -o report/
 | 3 | Report generated, but the analysis is incomplete or limited, or (with `--verify-integrity`) some integrity is not `verified` |
 | 2 | Usage error or fatal error |
 
-Differences, however many, never change the exit code. Reference notices (mismatch or
-unverified) do not change it either.
+Differences, however many, never change the exit code.
 
 ### Output
 
@@ -82,9 +81,10 @@ report/
 ├── report.html               # open directly from disk; no server, no network
 ├── comparison.json           # everything the report shows
 ├── manifests/<source>/{golden,current}.json
-├── supporting/{golden,current}/   # capture.yaml, device-info.txt, checksum files (verbatim)
+├── supporting/{golden,current}/   # device-info.txt, checksum files (verbatim)
 ├── diffs/NNNN.html            # one line-diff page per modified text file
-├── files/NNNN.html            # with --allfiles: one content page per other text file
+├── files/NNNN.html            # one content page per added, deleted or metadata-changed text
+│                              #   file (with --allfiles: per other text file too)
 ├── tool_log.jsonl            # every external command: argv, status, diagnostics, timing, bytes
 └── outputs.json              # the files written by this run (used by --force)
 ```
@@ -104,7 +104,6 @@ golden/
 ├── mmcblk0.dd
 ├── mtdblock0.bin
 ├── SHA256SUMS                  # used with --verify-integrity; *.sha256 / *.sha256sum also accepted
-├── capture.yaml                # optional, written by the analyst
 └── device-info.txt             # optional; copied verbatim and shown in the report, never parsed
 ```
 
@@ -137,76 +136,8 @@ How each image is handled:
 | Anything else (e.g. raw flash `.bin`) | *Image-level only*: signature detection and an identical/different image hash. This is not a file-level comparison. |
 | Present on one side only | *Unmatched source*. Its integrity is checked with `--verify-integrity`. Its contents are never reported as added or deleted. |
 
-### capture.yaml
-
-```yaml
-schema: 1
-device_model: XYZ-100
-device_serial: null              # unknown: leave null, never guess
-captured_at: 2026-10-01T14:20:00Z
-captured_by: analyst
-firmware:
-  active: "24.11.6"
-  inactive: null                 # unknown
-sources:
-  config-active-crypt.dd: { role: config-active }      # source firmware = firmware.active
-  config-other-crypt.dd:  { role: config-inactive }    # source firmware = firmware.inactive
-  nvram-crypt.dd:         { role: nvram }              # active firmware shown as context only
-  mmcblk0.dd:             { role: disk }
-partitions:
-  mmcblk0.dd:
-    1: { role: boot }
-    3: { role: config, encrypted: true, mapper_image: config-active-crypt.dd }
-observations:                    # structured capture-time command output
-  - field: firmware.active
-    value: "24.11.6"
-    command: "cat /etc/version"
-    reference: device-info.txt
-```
-
-Every value carries its provenance:
-
-- `analyst`;
-- `analyst-role` (derived from a declared role);
-- `capture-command` (from `observations`).
-
-If two provenances disagree, the value is shown as **Conflict**.
-
-### Per-image capture files (two image files)
-
-When you compare two image files, each one can have its own `<image>.capture.yaml` next to
-it. The two images can then sit in the same folder:
-
-```
-sample/
-├── config-active-crypt1.dd
-├── config-active-crypt1.dd.capture.yaml
-├── config-active-crypt2.dd
-└── config-active-crypt2.dd.capture.yaml
-```
-
-```yaml
-# config-active-crypt2.dd.capture.yaml
-schema: 1
-device_model: XYZ-100
-role: config-active              # top-level role: only valid in a per-image file
-firmware:
-  active: "24.12.0"
-```
-
-- A per-image file replaces the folder's `capture.yaml` for that image.
-- Without one, both images read the folder's `capture.yaml`. A single file cannot confirm
-  that two captures match, so the reference stays *unverified* and the report says why.
-- `sources:` and `partitions:` entries may use each image's own file name.
-- In directory mode, per-image files are listed as "not used".
-
-**Reference notices.** The required fields are `device_model` plus the source firmware for
-configuration roles.
-
-- **Reference mismatch:** a required value is known on both sides and differs.
-- **Reference unverified:** a required value is missing on either side, or is in Conflict.
-
-The comparison always continues, with a persistent notice.
+When two image files are compared, the checksum files and `device-info.txt` of each image's
+own folder are used.
 
 ## What is compared per file
 
@@ -247,7 +178,7 @@ compromise verdict.
 
 | Priority | Conditions |
 |---|---|
-| P1 | Any sensitive change: SUID/SGID, capabilities, `security.*` xattrs, ownership changed to root, a new symlink, a type change to symlink. Also any content, existence or type change on an ELF binary or script, on any file in a boot-role partition, or on a path matched by `elevate`. |
+| P1 | Any sensitive change: SUID/SGID, capabilities, `security.*` xattrs, ownership changed to root, a new symlink, a type change to symlink. Also any content, existence or type change on an ELF binary or script, on any file in a boot partition (fsstat: last mounted at `/boot`), or on a path matched by `elevate`. |
 | P2 | Other content, existence or type changes, and incomplete entries. |
 | P3 | Metadata-only changes. |
 | P4 | Fully expected entries. |
@@ -282,11 +213,17 @@ Rule semantics:
 
 ## The report
 
-- **Banners:** persistent banners for Integrity FAILED, Reference mismatch/unverified and
-  Incomplete analysis. They can be collapsed but never dismissed.
+- **Banners:** persistent banners for Integrity FAILED and Incomplete analysis (something
+  could not be read or compared). They can be collapsed but never dismissed. Format limits
+  (encrypted or unsupported partitions, image-level sources) are the same on every run of a
+  device, so they are not banners: the overview lists them, and their sections show them.
 - **Start view:** the report opens on the file table of the first filesystem section.
+- **Overview:** headline tiles (changed entries, sensitive changes, image integrity, analysis
+  state), changed entries per filesystem on one scale with status counts that open the file
+  table already filtered, the partitions of each disk (compared or not analysed, and why),
+  the raw images with their identical/different hash, and the format limits.
 - **Sidebar:** per-source sections, plus disk partitions, image-level and unmatched sources,
-  integrity, capture metadata, device info, rules, files not used, and tools.
+  integrity, device info, rules, files not used, and tools.
 - **Device info:** each side's `device-info.txt` as captured, side by side, with the lines that
   differ highlighted and an *Only differing lines* filter. Section labels (date, `uname -a`,
   `/proc/partitions`, `lsblk`, `blkid`) are recognised from the command output format, only to
@@ -320,14 +257,14 @@ Phase 2, decided but not yet implemented:
 ## Line diffs and file pages
 
 Every **Modified** regular file whose content changed and is text on both
-sides gets a side-by-side line diff page, `diffs/NNNN.html`. The detail panel links to it
-("Open line diff in a new tab").
+sides gets a side-by-side line diff page, `diffs/NNNN.html`. Every **Added**, **Deleted** and
+**Metadata changed** regular text file gets a content page, `files/NNNN.html` (golden for
+deleted files, current otherwise). The *Open* column of the file table and the detail panel
+link to them ("diff ↗", "view ↗").
 
-- **Re-read and checked.** Both versions are extracted again with `icat` (read-only), and the
-  page is written only if each one matches the SHA-256 recorded during the analysis.
-- **`--allfiles`.** Every other regular text file also gets a content page,
-  `files/NNNN.html`: added files (current), deleted files (golden), and unchanged,
-  metadata-only or incomplete files (current). The detail panel links to it ("Open file").
+- **Re-read and checked.** Each version is extracted again with `icat` (read-only), and the
+  page is written only if it matches the SHA-256 recorded during the analysis.
+- **`--allfiles`.** Unchanged and incomplete text files also get a content page (current).
   This re-reads every text file, so on large images it adds time and output size. The run
   prints how many pages were written and how long it took.
 - **Limits.** Files above 1 MiB, binary files (ELF, other binary) and anything over 64 MiB in
@@ -380,8 +317,7 @@ captures and confirm:
 - [ ] Whether `/etc/version` exists in any standalone image or in `/boot`. The tool does not
       assume it does.
 - [ ] The real log, data and key paths, to write `--rules` (none are assumed).
-- [ ] The encryption format observed on mmcblk0 p3/p5/p6, and that the declared `partitions:`
-      entries match.
+- [ ] The encryption format observed on mmcblk0 p3/p5/p6.
 - [ ] The real `fls`, `fsstat` and `debugfs` diagnostics. Extend
       `forensic_compare/tools/diagnostics.py` only with understood messages.
 - [ ] No unexpected *not assessed* xattr results on real kernel-written inodes. The

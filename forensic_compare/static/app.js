@@ -128,8 +128,6 @@
   // ---- notices / banners --------------------------------------------------------------------
   var NOTICE_META = {
     'integrity-failed': { cls: 'danger', icon: '⛔', label: 'Integrity FAILED' },
-    'reference-mismatch': { cls: 'danger', icon: '⚠', label: 'Reference mismatch' },
-    'reference-unverified': { cls: 'warn', icon: '⚠', label: 'Reference unverified' },
     'incomplete': { cls: 'info', icon: '?', label: 'Incomplete analysis' },
     'contents': { cls: 'warn', icon: 'ℹ', label: 'This report contains file contents' }
   };
@@ -167,15 +165,9 @@
   }
 
   // ---- top bar ----------------------------------------------------------------------------
-  function capField(side, name) {
-    var c = DATA.capture && DATA.capture[side];
-    var f = c && c.fields && c.fields[name];
-    if (!f) return 'not recorded';
-    if (f.state === 'conflict') return 'CONFLICT';
-    return f.value === null || f.value === undefined ? 'not recorded' : String(f.value);
-  }
   function renderTopbar() {
     var integ = DATA.integrity || {};
+    var inputs = DATA.inputs || {};
     var cls = integrityClass(integ.overall);
     var label = integ.overall === 'verified' ? 'Integrity verified' :
       integ.overall === 'failed' ? 'Integrity FAILED' :
@@ -188,9 +180,8 @@
       }, '☰'),
       el('div', { class: 'brand' }, 'forensic_compare', el('small', null, 'golden vs current')),
       el('div', { class: 'case' },
-        el('span', null, 'Model ', el('b', null, capField('golden', 'device_model')), ' / ', el('b', null, capField('current', 'device_model'))),
-        el('span', null, 'Golden captured ', el('b', null, capField('golden', 'captured_at'))),
-        el('span', null, 'Current captured ', el('b', null, capField('current', 'captured_at')))),
+        el('span', null, 'Golden ', el('b', null, inputs.golden || '')),
+        el('span', null, 'Current ', el('b', null, inputs.current || ''))),
       el('span', { class: 'chip ' + cls, id: 'integrity-badge', title: integ.disclaimer || '' }, label),
       el('button', {
         id: 'theme-toggle', 'aria-label': 'Toggle light/dark theme',
@@ -236,7 +227,6 @@
     nav.appendChild(g);
     nav.appendChild(el('div', { class: 'nav-group' }, el('h3', null, 'Case'),
       navItem({ type: 'integrity' }, 'Integrity'),
-      navItem({ type: 'capture' }, 'Capture metadata'),
       navItem({ type: 'device' }, 'Device info'),
       navItem({ type: 'rules' }, 'Expected-change rules'),
       navItem({ type: 'files' }, 'Files not used'),
@@ -270,27 +260,156 @@
   }
 
   // ---- overview ----------------------------------------------------------------------------
-  function renderOverview() {
-    var box = el('div');
-    box.appendChild(el('div', { class: 'section-head' }, el('h2', null, 'Overview')));
-    var comp = DATA.completeness || {};
-    box.appendChild(el('div', { class: 'panel' },
-      el('h3', null, comp.complete ? 'Analysis complete' : 'Analysis incomplete or limited'),
-      list(comp.reasons)));
-    var rows = (DATA.sources || []).map(function (s) {
-      var sum = s.summary || {};
-      return [
-        el('button', { class: 'nav-item', onclick: function () { go({ type: 'source', id: s.id }); } }, s.id),
-        s.kind, sectionChip(s),
-        s.kind === 'filesystem' ? String(sum.modified || 0) : '',
-        s.kind === 'filesystem' ? String(sum.added || 0) : '',
-        s.kind === 'filesystem' ? String(sum.deleted || 0) : '',
-        s.kind === 'filesystem' ? String(sum.metadata || 0) : '',
-        s.kind === 'filesystem' ? String(sum.incomplete_any || 0) : '',
-        (s.reference && s.reference.notices || []).join(', ')
-      ];
+  var PART_LIMIT = {
+    unknown: 'not analysed · no signature', unsupported: 'not analysed · unsupported format',
+    encrypted: 'not analysed · encrypted', 'missing on one side': 'missing on one side',
+    unreadable: 'unreadable', incompatible: 'incompatible formats'
+  };
+  var CHANGE_KEYS = ['modified', 'added', 'deleted', 'metadata'];
+  function fmtBytesShort(n) {
+    if (n === null || n === undefined) return '';
+    var units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'], v = n, i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return (i ? v.toFixed(v < 10 ? 1 : 0) : String(v)) + ' ' + units[i];
+  }
+  function changedCount(s) { var m = s.summary || {}; return (m.total || 0) - (m.unchanged || 0); }
+  // opens a section's file table with the given filters (the rest at their defaults)
+  function openSection(id, filters) {
+    return function () {
+      state.filters = Object.assign({}, DEFAULT_FILTERS, filters || {});
+      go({ type: 'source', id: id });
+    };
+  }
+  function kpi(label, value, sub, tone, onclick) {
+    var body = [el('span', { class: 'kpi-label' }, label), value, sub ? el('span', { class: 'kpi-sub' }, sub) : null];
+    var cls = 'kpi' + (tone ? ' tone-' + tone : '');
+    return onclick ? el('button', { class: cls, onclick: onclick }, body) : el('div', { class: cls }, body);
+  }
+  function kpiNumber(n) { return el('span', { class: 'kpi-value' }, String(n)); }
+  function kpiWord(icon, text) { return el('span', { class: 'kpi-value word' }, el('span', { class: 'kpi-icon', 'aria-hidden': 'true' }, icon), text); }
+  function overviewKpis(fsecs, other, limits) {
+    var changed = fsecs.reduce(function (a, s) { return a + changedCount(s); }, 0);
+    var withChanges = fsecs.filter(function (s) { return changedCount(s) > 0; });
+    var sensitive = fsecs.reduce(function (a, s) { return a + ((s.summary || {}).sensitive || 0); }, 0);
+    var firstSensitive = fsecs.filter(function (s) { return (s.summary || {}).sensitive; })[0];
+    var integ = DATA.integrity || {}, imgs = integ.images || [];
+    var verified = imgs.filter(function (v) { return v.status === 'verified'; }).length;
+    var failed = imgs.filter(function (v) { return v.status === 'failed'; }).length;
+    var iw = { verified: ['✓', 'Verified', 'ok'], failed: ['⛔', 'FAILED', 'danger'], 'not-checked': ['–', 'Not checked', ''] }[integ.overall] ||
+      ['◐', 'Stable, unverified', 'warn'];
+    var isub = integ.overall === 'not-checked' ? 'run with --verify-integrity to hash the images' :
+      integ.overall === 'failed' ? failed + ' of ' + imgs.length + ' images failed' :
+      verified + ' of ' + imgs.length + ' images match their checksum';
+    var aw = other.length ? ['?', 'Incomplete', 'danger'] : limits.length ? ['◇', 'Limited by format', 'info'] : ['✓', 'Complete', 'ok'];
+    var asub = other.length ? other.length + ' part' + (other.length > 1 ? 's' : '') + ' could not be read or compared' :
+      limits.length ? limits.length + ' part' + (limits.length > 1 ? 's' : '') + ' not analysed file by file' : 'every source was analysed';
+    return el('div', { class: 'kpis' },
+      kpi('Changed entries', kpiNumber(changed), 'in ' + withChanges.length + ' of ' + fsecs.length + ' filesystems', '',
+        withChanges.length ? openSection(withChanges[0].id) : null),
+      kpi('Sensitive changes', kpiNumber(sensitive), sensitive ? 'SUID/SGID, capabilities, security xattrs, new symlinks… review first' : 'none found',
+        sensitive ? 'danger' : 'ok', firstSensitive ? openSection(firstSensitive.id, { sensitiveOnly: true }) : null),
+      kpi('Image integrity', kpiWord(iw[0], iw[1]), isub, iw[2], function () { go({ type: 'integrity' }); }),
+      kpi('Analysis', kpiWord(aw[0], aw[1]), asub, aw[2], null));
+  }
+  function changesPanel(fsecs) {
+    var max = Math.max.apply(null, fsecs.map(changedCount).concat([1]));
+    var grid = el('div', { class: 'chg' });
+    fsecs.forEach(function (s) {
+      var m = s.summary || {}, n = changedCount(s);
+      grid.appendChild(el('button', { class: 'chg-name', title: 'Open ' + s.id, onclick: openSection(s.id) }, s.title || s.id));
+      if (n) {
+        var fill = el('span', { class: 'bar-fill' });
+        fill.style.width = Math.max(n / max * 100, 1) + '%';
+        var tip = CHANGE_KEYS.filter(function (k) { return m[k]; }).map(function (k) { return m[k] + ' ' + STATUS[k].label.toLowerCase(); }).join(' · ');
+        grid.appendChild(el('span', { class: 'bar', title: n + ' changed entries: ' + tip },
+          el('span', { class: 'bar-track' }, fill), el('span', { class: 'bar-n' }, String(n))));
+      } else {
+        grid.appendChild(el('span', { class: 'chg-none' }, '✓ no changes · ' + (m.total || 0) + ' entries compared'));
+      }
+      var chips = CHANGE_KEYS.filter(function (k) { return m[k]; }).map(function (k) {
+        return el('button', { class: 'chip st-' + k, title: 'Show ' + STATUS[k].label.toLowerCase() + ' entries', onclick: openSection(s.id, { status: k }) },
+          STATUS[k].icon + ' ' + m[k] + ' ' + STATUS[k].label);
+      });
+      if (m.incomplete_any) chips.push(el('button', { class: 'chip st-incomplete', onclick: openSection(s.id, { status: 'incomplete' }) }, '? ' + m.incomplete_any + ' incomplete'));
+      if (m.sensitive) chips.push(el('button', { class: 'chip p1', title: 'Show sensitive changes', onclick: openSection(s.id, { sensitiveOnly: true }) }, '⚑ ' + m.sensitive + ' sensitive'));
+      grid.appendChild(el('span', { class: 'chg-chips' }, chips));
     });
-    box.appendChild(simpleTable(['Section', 'Kind', 'Status', 'Modified', 'Added', 'Deleted', 'Metadata', 'Incomplete', 'Reference'], rows));
+    return el('section', { class: 'panel ov-panel' },
+      el('div', { class: 'ov-panel-head' }, el('h3', null, 'Changed entries per filesystem'),
+        el('span', { class: 'muted' }, 'bar length = changed entries; click a label to open its files')),
+      fsecs.length ? grid : el('p', { class: 'muted' }, 'No filesystem was compared.'));
+  }
+  function partTile(p) {
+    var g = p.golden || p.current || {};
+    var size = g.length && g.sector_size ? fmtBytesShort(g.length * g.sector_size) : '';
+    var sig = (g.signatures || []).length ? g.signatures.join(', ') : 'no signature';
+    var child = p.status === 'compared' && sectionsById[p.section_id];
+    var n = child ? changedCount(child) : 0;
+    var body = [el('span', { class: 'pt-top' }, el('span', { class: 'pt-num' }, 'p' + p.number), el('span', { class: 'pt-size' }, size)),
+      el('span', { class: 'pt-sig' }, sig),
+      child ? el('span', { class: 'chip ' + (n ? '' : 'ok') }, n ? n + ' changes' : '✓ no changes') :
+        el('span', { class: 'pt-limit-label' }, PART_LIMIT[p.status] || p.status)];
+    var reason = [p.golden && p.golden.reason, p.current && p.current.reason].filter(Boolean)[0];
+    return child ? el('button', { class: 'pt', title: 'Open p' + p.number, onclick: openSection(child.id) }, body) :
+      el('div', { class: 'pt pt-limit', title: reason || '' }, body);
+  }
+  function disksPanel(disks) {
+    return el('section', { class: 'panel ov-panel' },
+      el('div', { class: 'ov-panel-head' }, el('h3', null, 'Partitioned disks'),
+        el('span', { class: 'muted' }, 'ext partitions are compared file by file; the others cannot be opened by this tool')),
+      disks.map(function (d) {
+        var lg = (d.layout || {}).golden || {};
+        return el('div', { class: 'disk' },
+          el('div', { class: 'disk-head' },
+            el('button', { class: 'chg-name', onclick: openSection(d.id) }, d.id), sectionChip(d),
+            el('span', { class: 'muted' }, (d.partitions || []).length + ' partitions · ' + (lg.table_type || 'no table') +
+              ((d.layout_differences || []).length ? ' · layout differs' : ' · same layout'))),
+          el('div', { class: 'pt-grid' }, (d.partitions || []).map(partTile)));
+      }));
+  }
+  function imagesPanel(imgs) {
+    return el('section', { class: 'panel ov-panel' },
+      el('div', { class: 'ov-panel-head' }, el('h3', null, 'Raw images'),
+        el('span', { class: 'muted' }, 'no filesystem the tool can read: only the whole-image hash is compared')),
+      el('div', { class: 'img-rows' }, imgs.map(function (s) {
+        var g = (s.golden || {}).sha256, c = (s.current || {}).sha256;
+        var chip = s.identical === true ? el('span', { class: 'chip ok' }, '✓ identical') :
+          s.identical === false ? el('span', { class: 'chip warn' }, '≠ different') : el('span', { class: 'chip' }, 'not compared');
+        return el('div', { class: 'img-row' },
+          el('button', { class: 'chg-name', onclick: openSection(s.id) }, s.id), chip,
+          el('span', { class: 'hex' }, s.identical === false ? shortHash(g) + ' → ' + shortHash(c) : shortHash(g || c)),
+          el('span', { class: 'muted' }, fmtBytesShort((s.golden || {}).size)));
+      })));
+  }
+  function renderOverview() {
+    var srcs = DATA.sources || [];
+    var comp = DATA.completeness || {};
+    var limits = comp.limits || [];
+    var other = (comp.reasons || []).filter(function (r) { return limits.indexOf(r) < 0; });
+    var fsecs = srcs.filter(function (s) { return s.kind === 'filesystem'; });
+    var disks = srcs.filter(function (s) { return s.kind === 'disk'; });
+    var imgs = srcs.filter(function (s) { return s.kind === 'image-level'; });
+    var unavailable = srcs.filter(function (s) { return s.kind === 'unavailable'; });
+    var box = el('div', { class: 'ov' },
+      el('div', { class: 'ov-head' }, el('h2', null, 'Overview'),
+        el('p', { class: 'muted' }, 'Generated ' + String(DATA.generated_at || '').replace('T', ' ').replace('Z', ' UTC') + ' · ' +
+          (DATA.mode === 'dir' ? 'directory mode' : 'two image files') + ' · ' + srcs.length + ' sections')),
+      overviewKpis(fsecs, other, limits));
+    if (other.length) {
+      box.appendChild(el('section', { class: 'panel ov-panel ov-alert' },
+        el('h3', null, '? Could not be read or compared (' + other.length + ')'), list(other),
+        unavailable.length ? el('div', { class: 'chips' }, unavailable.map(function (s) {
+          return el('button', { class: 'chip st-incomplete', onclick: openSection(s.id) }, s.id);
+        })) : null));
+    }
+    box.appendChild(changesPanel(fsecs));
+    if (disks.length) box.appendChild(disksPanel(disks));
+    if (imgs.length) box.appendChild(imagesPanel(imgs));
+    if (limits.length) {
+      box.appendChild(el('details', { class: 'panel ov-panel ov-limits' },
+        el('summary', null, 'Format limits (' + limits.length + '): parts this tool cannot analyse file by file'),
+        list(limits)));
+    }
     return box;
   }
 
@@ -402,8 +521,15 @@
   var COLUMNS = [
     ['priority', 'Priority'], ['status', 'Status'], ['path', 'Path'], [null, 'Golden Hash'],
     [null, 'Current Hash'], ['size', 'Size'], [null, 'Permissions'], [null, 'Owner'],
-    ['change', 'Change'], ['expected', 'Expected']
+    ['change', 'Change'], ['expected', 'Expected'], [null, 'Open']
   ];
+  // the entry's line diff or file view, opened from the table without selecting the row
+  function rowPageLink(e) {
+    var d = e.text_diff, v = e.text_view;
+    var a = d && d.file ? pageLink(d.file, 'diff ↗', 'sm') : v && v.file ? pageLink(v.file, 'view ↗', 'sm') : null;
+    if (a) ['click', 'keydown'].forEach(function (t) { a.addEventListener(t, function (ev) { ev.stopPropagation(); }); });
+    return a;
+  }
   function renderTable(section, rows) {
     var f = state.filters;
     var thead = el('tr');
@@ -436,7 +562,8 @@
         el('td', { class: 'mono' }, changedPair(permsOf(g), permsOf(c))),
         el('td', { class: 'mono' }, changedPair(ownerOf(g), ownerOf(c))),
         el('td', null, e.diffs.map(function (d) { return d.field; }).join(', ')),
-        el('td', null, exp));
+        el('td', null, exp),
+        el('td', null, rowPageLink(e)));
       tbody.appendChild(tr);
     });
     return el('div', { class: 'table-wrap' }, el('table', { id: 'entries' }, el('thead', null, thead), tbody));
@@ -495,12 +622,13 @@
     ['xattrs', 'Extended attributes', fmtXattrs, ['xattr:']]
   ];
   // File pages written next to the report: diffs/NNNN.html (line diffs of modified text files)
-  // and, with --allfiles, files/NNNN.html (content of every other text file). Only these
-  // relative paths are ever used as link targets.
+  // and files/NNNN.html (content of added, deleted and metadata-changed text files; with
+  // --allfiles, of every other text file). Only these relative paths are ever used as link
+  // targets.
   var PAGE_FILE = /^(diffs|files)\/\d{4,}\.html$/;
-  function pageLink(file, label) {
+  function pageLink(file, label, cls) {
     if (!PAGE_FILE.test(file)) return null;
-    return el('a', { class: 'btn', href: file, target: '_blank', rel: 'noopener noreferrer' }, label);
+    return el('a', { class: 'btn' + (cls ? ' ' + cls : ''), href: file, target: '_blank', rel: 'noopener noreferrer' }, label);
   }
   function filePages(e) {
     var opts = DATA.options || {};
@@ -518,8 +646,9 @@
         ' ', el('span', { class: 'chip' }, v.lines + ' lines')));
     } else if (v && v.reason) {
       out.push(el('p', { class: 'muted' }, 'File view not available (' + v.side + '): ' + v.reason + '.'));
-    } else if (!opts.all_files && !(d && d.file) && (sha(e.golden) || sha(e.current))) {
-      out.push(el('p', { class: 'muted' }, 'File contents are only included for modified text files; run with --allfiles to view every text file.'));
+    } else if (!opts.all_files && e.status !== 'modified' && (sha(e.golden) || sha(e.current))) {
+      out.push(el('p', { class: 'muted' }, !opts.text_diffs ? 'File pages were turned off for this report (--no-text-diffs).' :
+        'File views are written for added, deleted and metadata-changed text files; run with --allfiles to view unchanged and incomplete files too.'));
     }
     return out.length ? el('div', null, out) : null;
   }
@@ -605,26 +734,10 @@
     });
     return kvTable(rows);
   }
-  function referencePanel(ref) {
-    if (!ref) return null;
-    var rows = (ref.items || []).map(function (i) {
-      return [i.field, refVal(i.golden), refVal(i.current), el('span', { class: 'chip ' + (i.state === 'ok' ? 'ok' : i.state === 'mismatch' ? 'danger' : 'warn') }, i.state)];
-    });
-    (ref.context || []).forEach(function (i) { rows.push([i.field + ' (context)', refVal(i.golden), refVal(i.current), '']); });
-    return el('div', { class: 'panel' }, el('h3', null, 'Reference (role: ' + (ref.role || 'not declared') + ')'),
-      simpleTable(['Field', 'Golden', 'Current', 'State'], rows), list(ref.notes));
-  }
-  function refVal(r) {
-    if (!r) return '';
-    if (r.state === 'not-recorded') return el('span', { class: 'muted' }, 'not recorded');
-    if (r.state === 'conflict') return el('span', { class: 'chip danger' }, 'Conflict: ' + r.values.map(function (v) { return v.value + ' (' + v.provenance + ')'; }).join(' vs '));
-    return el('span', null, String(r.value), ' ', el('span', { class: 'muted' }, '(' + r.values.map(function (v) { return v.provenance; }).join(', ') + ')'));
-  }
   function sectionHeader(section) {
     return el('div', null,
       el('div', { class: 'section-head' }, el('h2', null, section.title || section.id),
         el('span', { class: 'chip' }, section.kind), sectionChip(section),
-        section.role ? el('span', { class: 'chip' }, 'role: ' + section.role) : null,
         section.boot && section.boot.is_boot ? el('span', { class: 'chip warn' }, 'boot (' + section.boot.sources.join('; ') + ')') : null),
       section.incomplete_reasons && section.incomplete_reasons.length ? el('div', { class: 'panel' }, el('b', { class: 'na' }, 'Incomplete'), list(section.incomplete_reasons)) : null,
       section.warnings && section.warnings.length ? el('div', { class: 'panel' }, el('b', null, 'Warnings'), list(section.warnings)) : null);
@@ -633,7 +746,6 @@
     var box = el('div');
     box.appendChild(sectionHeader(section));
     box.appendChild(fsFacts(section));
-    box.appendChild(referencePanel(section.reference));
     box.appendChild(renderCards(section));
     box.appendChild(renderFilters(section));
     sectionBody = el('div', { id: 'section-body' });
@@ -650,7 +762,6 @@
   function renderDisk(section) {
     var box = el('div');
     box.appendChild(sectionHeader(section));
-    box.appendChild(referencePanel(section.reference));
     var lg = section.layout || {};
     box.appendChild(kvTable([
       ['Golden table', lg.golden ? lg.golden.table_type + ' · ' + lg.golden.sector_size + '-byte sectors' : 'none'],
@@ -659,17 +770,12 @@
       box.appendChild(el('div', { class: 'panel' }, el('b', null, 'Layout differences'), list(section.layout_differences)));
     }
     var rows = (section.partitions || []).map(function (p) {
-      var declared = Object.keys(p.declared || {}).map(function (k) {
-        var r = p.declared[k];
-        return el('div', null, k + ': ', refVal(r));
-      });
       var go1 = p.section_id ? el('button', { onclick: function () { go({ type: 'source', id: p.section_id }); } }, 'Open comparison') : null;
-      var go2 = p.mapper_section ? el('button', { onclick: function () { go({ type: 'source', id: p.mapper_section }); } }, 'Open mapper image ' + p.mapper_section) : null;
       return ['p' + p.number, el('span', { class: 'chip ' + (p.status === 'compared' ? 'ok' : p.status === 'encrypted' ? 'warn' : 'st-incomplete') }, p.status),
-        partSide(p.golden), partSide(p.current), el('div', null, declared.length ? declared : el('span', { class: 'muted' }, 'none declared')), el('div', null, go1, go2)];
+        partSide(p.golden), partSide(p.current), el('div', null, go1)];
     });
     box.appendChild(el('h3', null, 'Partitions'));
-    box.appendChild(simpleTable(['#', 'Analysis', 'Golden', 'Current', 'Declared (capture.yaml)', ''], rows));
+    box.appendChild(simpleTable(['#', 'Analysis', 'Golden', 'Current', ''], rows));
     return box;
   }
   function renderImageLevel(section) {
@@ -681,7 +787,6 @@
       ['Golden'].concat(side(section.golden)), ['Current'].concat(side(section.current))]));
     box.appendChild(el('p', null, 'Image hashes: ', el('b', null, section.identical === true ? 'identical' : section.identical === false ? 'different' : 'unknown'),
       el('span', { class: 'muted' }, ' — this is not a file-level comparison.')));
-    box.appendChild(referencePanel(section.reference));
     return box;
   }
   function renderUnavailable(section) {
@@ -722,20 +827,6 @@
       simpleTable(['Side', 'Image', 'Verdict', 'Reason', 'Supplied checksum', 'Pre-analysis', 'Post-analysis'], rows),
       el('h3', null, 'Checksum manifests'),
       files.length ? simpleTable(['Side', 'File', 'Entries used', 'Other'], files) : el('p', { class: 'muted' }, 'No checksum manifests supplied.'));
-  }
-  function renderCapture() {
-    var box = el('div', null, el('div', { class: 'section-head' }, el('h2', null, 'Capture metadata')));
-    ['golden', 'current'].forEach(function (side) {
-      var c = (DATA.capture || {})[side] || {};
-      var rows = Object.keys(c.fields || {}).map(function (k) { return [el('span', { class: 'mono' }, k), refVal(c.fields[k])]; });
-      box.appendChild(el('div', { class: 'panel' }, el('h3', null, side === 'golden' ? 'Golden' : 'Current'),
-        c.present ? el('p', { class: 'muted mono' }, 'Read from ' + (c.path || 'capture.yaml')) : el('p', { class: 'muted' }, 'No capture file (capture.yaml or <image>.capture.yaml): every value is not recorded.'),
-        list(c.errors),
-        rows.length ? simpleTable(['Field', 'Value (provenance)'], rows) : null,
-        el('h4', null, 'Supporting files (copied verbatim to supporting/' + side + '/; device-info.txt is shown under Device info and never parsed)'),
-        simpleTable(['File', 'SHA-256', 'Size'], (c.supporting || []).map(function (s) { return [s.name, el('span', { class: 'hex' }, s.sha256), String(s.size)]; }))));
-    });
-    return box;
   }
   // text with the character ranges [[start, end], …] (code points) wrapped in <mark>
   function markedText(text, spans) {
@@ -859,7 +950,6 @@
       content.appendChild(s.kind === 'filesystem' ? renderFilesystem(s) : s.kind === 'disk' ? renderDisk(s) :
         s.kind === 'image-level' ? renderImageLevel(s) : renderUnavailable(s));
     } else if (v.type === 'integrity') content.appendChild(renderIntegrity());
-    else if (v.type === 'capture') content.appendChild(renderCapture());
     else if (v.type === 'device') content.appendChild(renderDeviceInfo());
     else if (v.type === 'rules') content.appendChild(renderRules());
     else if (v.type === 'files') content.appendChild(renderFiles());

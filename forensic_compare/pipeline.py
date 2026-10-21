@@ -10,10 +10,12 @@ import traceback
 from dataclasses import dataclass, field
 
 from .analyzer import analyze_source
-from .capture_meta import Resolved, Valued, reference_check
 from .comparator import compare_manifests, summarize
 from .integrity import sha256_file
 from .rules import apply_rules
+
+# partitions the tool cannot open by design (format limits), as opposed to read failures
+LIMITED_STATUSES = ("encrypted", "unsupported", "unknown")
 
 
 @dataclass
@@ -21,41 +23,15 @@ class PipelineResult:
     sections: list = field(default_factory=list)
     manifests: list = field(default_factory=list)  # (source_id, side, Manifest)
     reasons: list = field(default_factory=list)    # completeness reasons
+    limits: list = field(default_factory=list)     # the reasons that are format limits
     notices: list = field(default_factory=list)
-
-
-def _ref_notices(section_id, ref):
-    out = []
-    for item in ref.items:
-        if item["state"] == "mismatch":
-            out.append({"type": "reference-mismatch", "source": section_id,
-                        "message": f"{item['field']} differs between golden and current"})
-        elif item["state"] == "unverified":
-            out.append({"type": "reference-unverified", "source": section_id,
-                        "message": f"{item['field']} is not recorded or is in conflict "
-                                   f"(golden: {item['golden']['state']}, "
-                                   f"current: {item['current']['state']})"})
-    return out
-
-
-def _merged(gmeta, cmeta, field_name) -> Resolved:
-    values = []
-    for side, meta in (("golden", gmeta), ("current", cmeta)):
-        for v in meta.fields.get(field_name, []):
-            values.append(Valued(v.value, v.provenance,
-                                 f"{side} {v.detail}" if v.detail else side))
-    if not values:
-        return Resolved(None, "not-recorded", [])
-    if len({repr(v.value) for v in values}) == 1:
-        return Resolved(values[0].value, "recorded", values)
-    return Resolved(None, "conflict", values)
 
 
 def _fs_side(m):
     return m.filesystem if m else None
 
 
-def _filesystem_section(sid, title, image, gm, cm, ruleset, ref, *, parent=None, boot=None):
+def _filesystem_section(sid, title, image, gm, cm, ruleset, *, parent=None, boot=None):
     boot = boot or {"is_boot": False, "sources": []}
     entries = compare_manifests(gm, cm, boot=boot["is_boot"])
     apply_rules(sid, entries, ruleset)
@@ -76,9 +52,8 @@ def _filesystem_section(sid, title, image, gm, cm, ruleset, ref, *, parent=None,
         reasons.append(f"{summary['incomplete_any']} entries not fully assessed")
     return {
         "id": sid, "title": title, "kind": "filesystem", "parent": parent, "image": image,
-        "role": ref.role, "status": "incomplete" if reasons else "compared",
-        "incomplete_reasons": reasons, "warnings": warnings, "reference": ref.to_dict(),
-        "boot": boot,
+        "status": "incomplete" if reasons else "compared",
+        "incomplete_reasons": reasons, "warnings": warnings, "boot": boot,
         "filesystem": {"golden": _fs_side(gm), "current": _fs_side(cm)},
         "inventory": {"golden": gm.inventory, "current": cm.inventory},
         "summary": summary, "entries": [e.to_dict() for e in entries],
@@ -126,30 +101,24 @@ def _layout_differences(gl, cl):
     return diffs
 
 
-def _disk_sections(sid, image, ga, ca, ruleset, ref, gmeta, cmeta, all_ids, result):
+def _disk_sections(sid, image, ga, ca, ruleset, result):
     gparts = {p.number: p for p in ga.partitions}
     cparts = {p.number: p for p in ca.partitions}
     parts, children, reasons = [], [], []
     for n in sorted(set(gparts) | set(cparts)):
         gp, cp = gparts.get(n), cparts.get(n)
-        declared = {k: _merged(gmeta, cmeta, f"partitions.{image}.{n}.{k}").to_dict()
-                    for k in ("role", "encrypted", "mapper_image")}
-        mapper = declared["mapper_image"]["value"]
         entry = {"number": n, "golden": _part_desc(gp), "current": _part_desc(cp),
-                 "declared": declared, "section_id": None,
-                 "mapper_section": mapper if mapper in all_ids else None}
+                 "section_id": None}
         statuses = {p.status for p in (gp, cp) if p}
         if gp and cp and gp.status == cp.status == "analyzed":
             child_id = f"{sid}#p{n}"
             boot_sources = []
-            if declared["role"]["value"] == "boot":
-                boot_sources.append("declared role: boot (capture.yaml)")
             for side, p in (("golden", gp), ("current", cp)):
                 lm = p.manifest.filesystem.get("last_mounted", {})
                 if lm.get("state") == "ok" and lm.get("value") == "/boot":
                     boot_sources.append(f"{side} fsstat: last mounted at /boot")
             child = _filesystem_section(child_id, f"{sid} · p{n}", image, gp.manifest,
-                                        cp.manifest, ruleset, ref, parent=sid,
+                                        cp.manifest, ruleset, parent=sid,
                                         boot={"is_boot": bool(boot_sources),
                                               "sources": boot_sources})
             children.append(child)
@@ -174,43 +143,40 @@ def _disk_sections(sid, image, ga, ca, ruleset, ref, gmeta, cmeta, all_ids, resu
                 entry["status"] = "unknown"
             why = "; ".join(sorted({p.reason for p in (gp, cp) if p and p.reason}))
             reasons.append(f"p{n}: {entry['status']}" + (f" ({why})" if why else ""))
+            if entry["status"] in LIMITED_STATUSES:
+                result.limits.append(f"{sid} {reasons[-1]}")
         parts.append(entry)
     layout_diffs = _layout_differences(ga.layout, ca.layout)
-    limited = any(p["status"] in ("encrypted", "unsupported", "unknown") for p in parts)
+    limited = any(p["status"] in LIMITED_STATUSES for p in parts)
     disk = {
         "id": sid, "title": sid, "kind": "disk", "parent": None, "image": image,
-        "role": ref.role,
         "status": "compared" if not reasons else ("limited" if limited else "incomplete"),
-        "incomplete_reasons": reasons, "warnings": [], "reference": ref.to_dict(),
+        "incomplete_reasons": reasons, "warnings": [],
         "layout": {"golden": _layout_desc(ga.layout), "current": _layout_desc(ca.layout)},
         "layout_differences": layout_diffs, "partitions": parts,
     }
     return [disk] + children, [f"{sid} {r}" for r in reasons]
 
 
-def analyze_all(pairing, ruleset, gmeta, cmeta, runner, *, jobs=4, quiet=True,
+def analyze_all(pairing, ruleset, runner, *, jobs=4, quiet=True,
                 progress_stream=None, pre_hashes=None) -> PipelineResult:
     result = PipelineResult()
     pre_hashes = pre_hashes or {}
-    all_ids = {p.source_id for p in pairing.pairs}
     for pair in pairing.pairs:
         sid = pair.source_id
-        ref = reference_check(pair.golden.name, gmeta, cmeta)
-        result.notices += _ref_notices(sid, ref)
         try:
             ga = analyze_source(runner, pair.golden, side="golden", source_id=sid, jobs=jobs,
                                 quiet=quiet, progress_stream=progress_stream)
             ca = analyze_source(runner, pair.current, side="current", source_id=sid, jobs=jobs,
                                 quiet=quiet, progress_stream=progress_stream)
-            sections, reasons = _pair_sections(pair, sid, ga, ca, ruleset, ref, gmeta, cmeta,
-                                               all_ids, result, pre_hashes)
+            sections, reasons = _pair_sections(pair, sid, ga, ca, ruleset, result, pre_hashes)
         except Exception as exc:  # keep the run alive; make the failure visible
             sections = [{"id": sid, "title": sid, "kind": "unavailable", "parent": None,
-                         "image": pair.golden.name, "role": ref.role, "status": "incomplete",
+                         "image": pair.golden.name, "status": "incomplete",
                          "reason": f"internal error while analyzing this pair: {exc!r}",
                          "traceback": traceback.format_exc(limit=8),
                          "incomplete_reasons": ["internal error"], "warnings": [],
-                         "reference": ref.to_dict(), "golden": None, "current": None}]
+                         "golden": None, "current": None}]
             reasons = [f"{sid}: internal error ({exc!r})"]
         result.sections += sections
         result.reasons += reasons
@@ -219,12 +185,15 @@ def analyze_all(pairing, ruleset, gmeta, cmeta, runner, *, jobs=4, quiet=True,
     if not pairing.pairs and not pairing.unmatched:
         result.reasons.append("no supported images found in the inputs "
                               "(.dd, .img, .raw, .bin)")
+    # format limits repeat on every run of the same device: they are listed in the overview
+    # and in their section, and only the other reasons become notices (banners)
     for r in result.reasons:
-        result.notices.append({"type": "incomplete", "source": None, "message": r})
+        if r not in result.limits:
+            result.notices.append({"type": "incomplete", "source": None, "message": r})
     return result
 
 
-def _pair_sections(pair, sid, ga, ca, ruleset, ref, gmeta, cmeta, all_ids, result, pre_hashes):
+def _pair_sections(pair, sid, ga, ca, ruleset, result, pre_hashes):
     image = pair.golden.name
     if "unreadable" in (ga.kind, ca.kind) or ga.kind != ca.kind:
         if "unreadable" in (ga.kind, ca.kind):
@@ -233,27 +202,27 @@ def _pair_sections(pair, sid, ga, ca, ruleset, ref, gmeta, cmeta, all_ids, resul
         else:
             reason = f"incompatible formats: golden is {ga.kind}, current is {ca.kind}"
         return [{"id": sid, "title": sid, "kind": "unavailable", "parent": None, "image": image,
-                 "role": ref.role, "status": "incomplete", "reason": reason,
-                 "incomplete_reasons": [reason], "warnings": [], "reference": ref.to_dict(),
+                 "status": "incomplete", "reason": reason,
+                 "incomplete_reasons": [reason], "warnings": [],
                  "golden": _side_desc(ga), "current": _side_desc(ca)}], [f"{sid}: {reason}"]
     if ga.kind == "ext-fs":
-        section = _filesystem_section(sid, sid, image, ga.manifest, ca.manifest, ruleset, ref,
-                                      boot=_standalone_boot(gmeta, cmeta, image))
+        section = _filesystem_section(sid, sid, image, ga.manifest, ca.manifest, ruleset)
         result.manifests += [(sid, "golden", ga.manifest), (sid, "current", ca.manifest)]
         reasons = [f"{sid}: {r}" for r in section["incomplete_reasons"]]
         return [section], reasons
     if ga.kind == "disk":
-        return _disk_sections(sid, image, ga, ca, ruleset, ref, gmeta, cmeta, all_ids, result)
+        return _disk_sections(sid, image, ga, ca, ruleset, result)
     # image-level
     gh = _image_hash(pre_hashes, "golden", pair.golden)
     ch = _image_hash(pre_hashes, "current", pair.current)
     reason = ga.reason or ca.reason
     section = {"id": sid, "title": sid, "kind": "image-level", "parent": None, "image": image,
-               "role": ref.role, "status": "limited", "reason": reason,
-               "incomplete_reasons": [reason], "warnings": [], "reference": ref.to_dict(),
+               "status": "limited", "reason": reason,
+               "incomplete_reasons": [reason], "warnings": [],
                "golden": dict(_side_desc(ga), sha256=gh),
                "current": dict(_side_desc(ca), sha256=ch),
                "identical": (gh == ch) if gh and ch else None}
+    result.limits.append(f"{sid}: {reason}")
     return [section], [f"{sid}: {reason}"]
 
 
@@ -267,10 +236,3 @@ def _image_hash(pre_hashes, side, src):
         return sha256_file(src)
     except OSError:
         return None
-
-
-def _standalone_boot(gmeta, cmeta, image):
-    roles = {m.role(image) for m in (gmeta, cmeta)}
-    if "boot" in roles:
-        return {"is_boot": True, "sources": ["declared role: boot (capture.yaml)"]}
-    return {"is_boot": False, "sources": []}

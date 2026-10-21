@@ -34,7 +34,6 @@ class RunContext:
     inputs: dict
     tool_versions: dict
     integrity: dict
-    capture: dict
     rules: dict
     sources: list
     unmatched: list

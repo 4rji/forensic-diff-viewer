@@ -1,11 +1,12 @@
-"""File pages next to the report: line diffs of modified text files, and (``--allfiles``) a
-view of every other text file.
+"""File pages next to the report: line diffs of modified text files, and views of the content
+of other text files.
 
 - **Diffs** (default; ``--no-text-diffs`` turns them off): each Modified regular file whose
   content changed and is text on both sides gets a side-by-side page ``diffs/NNNN.html``.
-- **Views** (``--allfiles``): every other regular text file (added, deleted, unchanged,
-  metadata-only, incomplete) gets a page ``files/NNNN.html`` with its content. On large images
-  this re-reads every text file, so it is opt-in.
+- **Views** (default for added, deleted and metadata-changed files; ``--no-text-diffs`` turns
+  them off): the regular text file gets a page ``files/NNNN.html`` with its content. With
+  ``--allfiles`` every other regular text file (unchanged, incomplete) gets one too; on large
+  images that re-reads every text file, so it is opt-in.
 
 Content is extracted again with ``icat`` (read-only), checked against the SHA-256 recorded
 during the analysis, and rendered as escaped text in a standalone page with no script and a
@@ -30,6 +31,7 @@ from .tools.tsk import icat_stream
 MAX_FILE_BYTES = 1 << 20
 MAX_TOTAL_BYTES = 64 << 20
 TEXT_KINDS = ("text", "script", "empty")
+DEFAULT_VIEWS = ("added", "deleted", "metadata")  # statuses with a file view by default
 CONTEXT = 3
 MAX_INLINE_LINE = 2000  # longer lines are not highlighted character by character
 INLINE_MIN_RATIO = 0.5
@@ -126,7 +128,7 @@ def _plan(sections, manifests, max_file, all_files, text_diffs):
                 e["text_diff"] = {"reason": reason}
                 if reason != "not a regular file on both sides":
                     continue
-            if not all_files:
+            if not (all_files or (text_diffs and e.get("status") in DEFAULT_VIEWS)):
                 continue
             vs = view_side(e, max_file)
             if vs is None:

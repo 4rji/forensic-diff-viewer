@@ -29,7 +29,6 @@ if __package__ in (None, ""):  # executed as a script: make the package importab
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from forensic_compare import __version__  # noqa: E402
-from forensic_compare.capture_meta import load_capture  # noqa: E402
 from forensic_compare.device_info import build_device_info  # noqa: E402
 from forensic_compare.discovery import pair_inputs  # noqa: E402
 from forensic_compare.integrity import (  # noqa: E402
@@ -77,12 +76,12 @@ def build_parser():
                    help="hash every image before and after the analysis and check supplied "
                         "checksum manifests (off by default: verify the images beforehand)")
     p.add_argument("--no-text-diffs", dest="text_diffs", action="store_false",
-                   help="do not write the side-by-side line diff pages (diffs/) for modified "
-                        "text files")
+                   help="do not write the content pages: side-by-side line diffs (diffs/) for "
+                        "modified text files and views (files/) of added, deleted and "
+                        "metadata-changed text files")
     p.add_argument("--allfiles", dest="all_files", action="store_true",
-                   help="also write a page (files/) with the content of every other text file: "
-                        "added, deleted, unchanged... (re-reads every text file; slower on "
-                        "large images)")
+                   help="also write a view (files/) of every other text file: unchanged, "
+                        "incomplete (re-reads every text file; slower on large images)")
     p.add_argument("--quiet", action="store_true", help="no progress output")
     p.add_argument("--version", action="version", version=f"forensic_compare {__version__}")
     return p
@@ -240,10 +239,6 @@ def _run(args, pairing, ruleset, out, hooks, command) -> int:
     runner = ToolRunner(out / "tool_log.jsonl", timeout=args.timeout, jobs=args.jobs)
     writer.adopt("tool_log.jsonl")
     progress = Progress("integrity", quiet=args.quiet)
-    # single mode: both sides' declarations are looked up under the golden image name
-    as_name = pairing.pairs[0].golden.name if pairing.mode == "single" else None
-    gmeta = load_capture(pairing.golden_listing, as_name=as_name)
-    cmeta = load_capture(pairing.current_listing, as_name=as_name)
 
     items, checksum_reports = [], {}
     for side, listing in (("golden", pairing.golden_listing), ("current", pairing.current_listing)):
@@ -258,7 +253,7 @@ def _run(args, pairing, ruleset, out, hooks, command) -> int:
     if "after_pre_hash" in hooks:
         hooks["after_pre_hash"](pairing)
     try:
-        result = analyze_all(pairing, ruleset, gmeta, cmeta, runner, jobs=args.jobs,
+        result = analyze_all(pairing, ruleset, runner, jobs=args.jobs,
                              quiet=args.quiet, pre_hashes=dict(tracker.pre) if tracker else {})
         pages = build_diffs(result.sections, result.manifests, runner, writer,
                             text_diffs=args.text_diffs, all_files=args.all_files,
@@ -305,13 +300,12 @@ def _run(args, pairing, ruleset, out, hooks, command) -> int:
         tool_versions=dict(runner.versions),
         integrity={"overall": overall, "disclaimer": DISCLAIMER, "images": images,
                    "checksum_files": checksum_reports},
-        capture={"golden": gmeta.to_dict(), "current": cmeta.to_dict()},
         rules=ruleset.to_dict(),
         sources=result.sections,
         unmatched=unmatched,
         not_used={"golden": pairing.golden_listing.not_used,
                   "current": pairing.current_listing.not_used},
-        completeness={"complete": complete, "reasons": result.reasons},
+        completeness={"complete": complete, "reasons": result.reasons, "limits": result.limits},
         notices=result.notices,
         options={"text_diffs": bool(args.text_diffs), "all_files": bool(args.all_files),
                  "verify_integrity": bool(args.verify_integrity)},
