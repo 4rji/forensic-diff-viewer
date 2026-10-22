@@ -306,7 +306,8 @@ Rule semantics:
 ## The report
 
 A walkthrough of every view, with what each field, status and chip means, is in
-[docs/report-guide.md](docs/report-guide.md).
+[docs/report-guide.md](docs/report-guide.md). A step-by-step tour with screenshots, including
+how to investigate a change, is in [docs/report-walkthrough.md](docs/report-walkthrough.md).
 
 - **Banners:** persistent banners for Integrity FAILED and Incomplete analysis (something
   could not be read or compared). They can be collapsed but never dismissed. Format limits

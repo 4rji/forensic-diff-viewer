@@ -1,12 +1,47 @@
 # Reading the report
 
 This guide walks through everything `report.html` shows, view by view. For installation and
-command-line options, see the [README](../README.md).
+command-line options, see the [README](../README.md). For a step-by-step tour with screenshots,
+see the [report walkthrough](report-walkthrough.md).
 
 The report compares a **golden** capture (the clean reference) with a **current** capture (the
 device under investigation). Which is which is decided only by the order of the arguments: the
 first is golden, the second is current. Every result reads from golden to current: *Added*
 means present in current only, *Deleted* means present in golden only.
+
+## What gets examined
+
+On a typical capture set (the CM8148 layout below), almost everything is compared file by
+file. Encrypted partitions are covered through their decrypted images; the only part that is
+not examined at all is the squashfs root filesystem.
+
+| Image / partition | What it is | Examined? |
+|---|---|---|
+| `config-active-crypt.dd` | Partition p5, **already decrypted** | ✅ File by file |
+| `config-other-crypt.dd` | Partition p3, **already decrypted** | ✅ File by file |
+| `nvram-crypt.dd` | Partition p6, **already decrypted** | ✅ File by file |
+| `mmcblk0.dd` p1 | `/boot` (ext4) | ✅ File by file |
+| `mmcblk0.dd` p2 | `rootfs-0` (ext4) | ✅ File by file |
+| `mmcblk0.dd` p3, p5, p6 | The same partitions, **encrypted** | ⚪ Not needed: their decrypted content is in the three `-crypt.dd` images above |
+| `mmcblk0.dd` **p4** | `rootfs-1`, **squashfs**: the running `/` | ❌ **Not examined**: neither files nor hash |
+| `mtdblock0.bin` | Raw flash | 🟡 Whole-image hash only: identical or different |
+| `mmcblk0boot0.bin`, `mmcblk0boot1.bin` | eMMC boot partitions | 🟡 Whole-image hash only: identical or different |
+
+Inside `mmcblk0.dd`, the encrypted partitions show *no signature*: plain dm-crypt has no
+header. Their content is still compared, because each one is also captured decrypted from
+`/dev/mapper/…`. `lsblk` in `device-info.txt` shows which mapper sits on which partition.
+
+> **Firmware note.** p4 holds the firmware that was running, and it is not compared. Compare
+> its hash by hand in both images, using the start and length shown in the `mmcblk0.dd`
+> section (in 512-byte sectors):
+>
+> ```bash
+> dd if=golden/mmcblk0.dd bs=512 skip=<start> count=<length> 2>/dev/null | shasum -a 256
+> dd if=current/mmcblk0.dd bs=512 skip=<start> count=<length> 2>/dev/null | shasum -a 256
+> ```
+>
+> Equal hashes mean the running firmware is identical. If they differ, extract the squashfs
+> from a copy (for example with `unsquashfs`) to see which files changed.
 
 ## Contents
 
