@@ -12,7 +12,8 @@ python3 compare.py /Users/harji/evidence/golden /Users/harji/evidence/evidence \
 
 The first folder is the **golden** capture (the clean reference) and the second is the
 **current** capture (the device under investigation). For a full reference of every view,
-field and status, see [report-guide.md](report-guide.md).
+field and status, see [report-guide.md](report-guide.md). The same walkthrough is also
+available as [HTML](report-walkthrough.html), to open in a browser.
 
 ## Contents
 

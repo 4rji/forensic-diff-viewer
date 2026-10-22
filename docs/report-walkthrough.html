@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forensic Diff Viewer - Report Walkthrough</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg:#0b0f14;
+  --panel:#111821;
+  --panel2:#151e29;
+  --border:#293548;
+  --text:#e8edf4;
+  --muted:#9fb0c3;
+  --accent:#58a6ff;
+  --green:#39d98a;
+  --yellow:#f6c85f;
+}
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; }
+body {
+  margin:0;
+  font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  line-height:1.6;
+}
+.container {
+  width:min(1100px, 92%);
+  margin:0 auto;
+  padding:40px 0 70px;
+}
+.logo {
+  display:block;
+  width:40%;
+  max-width:420px;
+  margin:0 auto 28px;
+}
+h1 { font-size:2.2rem; margin:0 0 8px; }
+h2 {
+  margin-top:44px;
+  padding-bottom:8px;
+  border-bottom:1px solid var(--border);
+}
+h3 { margin:34px 0 8px; font-size:1.25rem; display:flex; align-items:center; }
+p, li { color:var(--text); }
+a { color:var(--accent); }
+.muted { color:var(--muted); }
+.card {
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:22px;
+  margin:18px 0;
+}
+.card ol { margin:6px 0; padding-left:22px; }
+.card h4 { margin:12px 0 4px; color:var(--muted); font-size:.85rem; text-transform:uppercase; letter-spacing:.06em; }
+.card h4:first-child { margin-top:0; }
+code {
+  font-family:"SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+pre {
+  background:#080c11;
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:16px;
+  overflow:auto;
+  white-space:pre-wrap;
+}
+pre code { color:#dbe7f3; }
+.step {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  flex:none;
+  width:30px;
+  height:30px;
+  border-radius:999px;
+  background:var(--accent);
+  color:white;
+  font-weight:700;
+  font-size:1rem;
+  margin-right:10px;
+}
+.note {
+  border-left:4px solid var(--yellow);
+  background:var(--panel2);
+  padding:14px 16px;
+  border-radius:8px;
+  margin:16px 0;
+}
+.ok {
+  border-left:4px solid var(--green);
+  background:var(--panel2);
+  padding:14px 16px;
+  border-radius:8px;
+  margin:16px 0;
+}
+kbd {
+  border:1px solid var(--border);
+  border-bottom-width:2px;
+  padding:2px 6px;
+  border-radius:6px;
+  background:#101721;
+}
+figure { margin:18px 0 10px; text-align:center; }
+figure a { display:inline-block; width:60%; }
+figure img {
+  display:block;
+  width:100%;
+  height:auto;
+  border:1px solid var(--border);
+  border-radius:10px;
+  transition:border-color .15s ease;
+}
+figure a:hover img { border-color:var(--accent); }
+figcaption { color:var(--muted); font-size:.9rem; margin-top:6px; }
+@media (max-width: 760px) {
+  figure a { width:100%; }
+  .logo { width:70%; }
+}
+.footer {
+  margin-top:40px;
+  color:var(--muted);
+  font-size:.9rem;
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <img class="logo" src="../logo.png" alt="Logo">
+
+  <h1>Report Walkthrough</h1>
+  <p class="muted">A step-by-step tour of a real <code>forensic_compare</code> report, followed by a short investigation.</p>
+
+  <p>The screenshots come from a comparison of two CM8148 captures, run with:</p>
+  <pre><code>python3 compare.py /Users/harji/evidence/golden /Users/harji/evidence/evidence \
+  -o /tmp/case1/ --verify-integrity --allfiles</code></pre>
+  <p>The first folder is the <strong>golden</strong> capture (the clean reference) and the second is the
+    <strong>current</strong> capture (the device under investigation). For a full reference of every view,
+    field and status, see <a href="report-guide.md">report-guide.md</a>.</p>
+
+  <div class="card">
+    <h4>Tour of the report</h4>
+    <ol>
+      <li><a href="#step-1">The start page</a></li>
+      <li><a href="#step-2">Overview</a></li>
+      <li><a href="#step-3">Search</a></li>
+      <li><a href="#step-4">View a file</a></li>
+      <li><a href="#step-5">Line diff</a></li>
+      <li><a href="#step-6">The whole file</a></li>
+      <li><a href="#step-7">Image hashes</a></li>
+      <li><a href="#step-8">Device info</a></li>
+      <li><a href="#step-9">Tools &amp; run</a></li>
+    </ol>
+    <h4>How to investigate</h4>
+    <ol start="10">
+      <li><a href="#step-10">Open a file's details</a></li>
+      <li><a href="#step-11">Details beside or below the table</a></li>
+      <li><a href="#step-12">Filter the modified files</a></li>
+      <li><a href="#step-13">Check what changed and open the line diff</a></li>
+      <li><a href="#step-14">Read the changes</a></li>
+    </ol>
+  </div>
+
+  <p class="muted">Click any screenshot to open it at full size.</p>
+
+  <h2>Tour of the Report</h2>
+
+  <h3 id="step-1"><span class="step">1</span>The start page</h3>
+  <p>The report opens on the file table of the first filesystem, here <code>config-active-crypt.dd</code>.
+    At the top are the summary cards (291 entries: 126 unchanged, 10 modified, 81 added, 50 deleted,
+    24 metadata changed) and the filters. The sidebar gives access to the <strong>Overview</strong>, every
+    <strong>source</strong> image with its number of changes, and the <strong>case</strong> views (Integrity,
+    Device info, Expected-change rules, Files not used, Tools &amp; run).</p>
+  <figure>
+    <a href="images/walkthrough/01-start-page.png" target="_blank" rel="noopener"><img src="images/walkthrough/01-start-page.png" alt="The page the report opens on" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-2"><span class="step">2</span>Overview</h3>
+  <p>The summary of the whole comparison: changed entries, sensitive changes, image integrity and analysis
+    state; the changed entries of each filesystem, with links that open the file table already filtered;
+    the partitions of the disk; and the raw images, compared by hash.</p>
+  <figure>
+    <a href="images/walkthrough/02-overview.png" target="_blank" rel="noopener"><img src="images/walkthrough/02-overview.png" alt="Overview" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-3"><span class="step">3</span>Search</h3>
+  <p>Type in the search box (press <kbd>/</kbd> to jump to it) to filter by path, name or hash. Searching for
+    <code>pass</code> leaves two entries: <code>/data/pam.d/common-password</code> (added) and
+    <code>/data/passwd</code> (modified). The <strong>Open</strong> column links to the content of each one:
+    <strong>view ↗</strong> for the added file, <strong>diff ↗</strong> for the modified one.</p>
+  <figure>
+    <a href="images/walkthrough/03-search.png" target="_blank" rel="noopener"><img src="images/walkthrough/03-search.png" alt="Search for pass" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-4"><span class="step">4</span>View a file</h3>
+  <p><strong>view ↗</strong> opens the content of the file in a new tab. Here, the added
+    <code>/data/pam.d/common-password</code>, with its SHA-256. The content is extracted again read-only and
+    shown only if it matches the hash recorded during the analysis.</p>
+  <figure>
+    <a href="images/walkthrough/04-file-view.png" target="_blank" rel="noopener"><img src="images/walkthrough/04-file-view.png" alt="Content of an added file" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-5"><span class="step">5</span>Line diff</h3>
+  <p><strong>diff ↗</strong> opens a side-by-side diff of a modified file: golden on the left, current on the
+    right. Added lines are highlighted in green and removed lines in red. In <code>/data/passwd</code>, the
+    current capture has one extra line, the user <code>havi</code>. Runs of unchanged lines are collapsed.</p>
+  <figure>
+    <a href="images/walkthrough/05-line-diff.png" target="_blank" rel="noopener"><img src="images/walkthrough/05-line-diff.png" alt="Line diff of /data/passwd" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-6"><span class="step">6</span>The whole file</h3>
+  <p>Click a collapsed block, such as <em>29 unchanged lines</em>, to expand it and see the whole file.</p>
+  <figure>
+    <a href="images/walkthrough/06-whole-file.png" target="_blank" rel="noopener"><img src="images/walkthrough/06-whole-file.png" alt="Line diff with the unchanged lines expanded" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-7"><span class="step">7</span>Image hashes</h3>
+  <p><strong>Integrity</strong> lists every image of both captures with its verdict, the checksum supplied at
+    capture time and the SHA-256 taken before and after the analysis. Here all 14 images are
+    <strong>verified</strong>: each one matches its checksum and did not change during the analysis.</p>
+  <div class="ok"><em>Verified</em> proves the image is the one that was captured; it does not prove the firmware is authentic.</div>
+  <figure>
+    <a href="images/walkthrough/07-integrity.png" target="_blank" rel="noopener"><img src="images/walkthrough/07-integrity.png" alt="Integrity view with the image hashes" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-8"><span class="step">8</span>Device info</h3>
+  <p>The information captured from each device (<code>device-info.txt</code>), side by side, with the lines
+    that differ highlighted. The capture date always differs.</p>
+  <div class="note">
+    <strong>/tmp/evidence</strong> always appears as well: it is the USB drive the data is extracted to, and it
+    must be mounted during the capture. Its mount point can change between captures (here
+    <code>/tmp/evidence</code> and <code>/tmp/evidence2</code>), so that line can differ too. It is not a finding.
+  </div>
+  <figure>
+    <a href="images/walkthrough/08-device-info.png" target="_blank" rel="noopener"><img src="images/walkthrough/08-device-info.png" alt="Device info, golden and current side by side" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-9"><span class="step">9</span>Tools &amp; run</h3>
+  <p>The technical reference of the run: when the report was generated, the exact command, the mode, both
+    inputs, the forensic_compare version and the version of every external tool used (debugfs, fls, fsstat,
+    icat, mmls). Every external command is also logged in <code>tool_log.jsonl</code> next to the report.</p>
+  <figure>
+    <a href="images/walkthrough/09-tools-and-run.png" target="_blank" rel="noopener"><img src="images/walkthrough/09-tools-and-run.png" alt="Tools &amp; run" loading="lazy"></a>
+  </figure>
+
+  <h2>How to Investigate</h2>
+
+  <h3 id="step-10"><span class="step">10</span>Open a file's details</h3>
+  <p>Click a file in the table to see its information: golden against current for every field (type, mode,
+    owner, size, mtime, SHA-256, symlink target, capabilities, extended attributes), with the fields that
+    differ highlighted. Here, an added symlink: it is <em>absent</em> in golden and points to
+    <code>/lib/systemd/system/unauthssh-serial-port02.socket</code> in current.</p>
+  <p>The details open below the table. To move them to the side, click <strong>⇥ Beside</strong>.</p>
+  <figure>
+    <a href="images/walkthrough/10-details-below.png" target="_blank" rel="noopener"><img src="images/walkthrough/10-details-below.png" alt="Details of an added symlink, below the table" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-11"><span class="step">11</span>Details beside or below the table</h3>
+  <p>With the details beside the table, click <strong>⇩ Below</strong> to bring them back underneath. The
+    report remembers the choice. Below the table, there is room for full SHA-256 hashes on one line.</p>
+  <figure>
+    <a href="images/walkthrough/11-details-beside.png" target="_blank" rel="noopener"><img src="images/walkthrough/11-details-beside.png" alt="Details beside the table" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-12"><span class="step">12</span>Filter the modified files</h3>
+  <p>Use the filters to focus on one kind of change. <strong>Modified</strong> (the button or the card) leaves
+    the 10 files whose content changed. The <strong>Size</strong> column shows <code>golden → current</code>,
+    for example <code>/data/config/conman.conf</code>, from 27217 to 27996 bytes.</p>
+  <figure>
+    <a href="images/walkthrough/12-filter-modified.png" target="_blank" rel="noopener"><img src="images/walkthrough/12-filter-modified.png" alt="Modified files, with conman.conf" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-13"><span class="step">13</span>Check what changed and open the line diff</h3>
+  <p>Click the file to see its details: the size, the mtime and the <strong>SHA-256</strong> are highlighted
+    because they changed. <strong>Open line diff in a new tab ↗</strong> opens the changes; the chips next to it
+    count the lines added (+19) and removed (−13).</p>
+  <figure>
+    <a href="images/walkthrough/13-open-line-diff.png" target="_blank" rel="noopener"><img src="images/walkthrough/13-open-line-diff.png" alt="Details of conman.conf with the line diff link" loading="lazy"></a>
+  </figure>
+
+  <h3 id="step-14"><span class="step">14</span>Read the changes</h3>
+  <p>The diff opens in a new tab, with golden on the left and current on the right. Changed lines are
+    highlighted, and the exact characters that changed are marked inside them. In <code>conman.conf</code>, for
+    example, the ping test of each network probe changed from <code>8.8.8.8</code> to <code>1.1.1.1</code> with a
+    fallback to <code>8.8.4.4</code>.</p>
+  <figure>
+    <a href="images/walkthrough/14-diff-page.png" target="_blank" rel="noopener"><img src="images/walkthrough/14-diff-page.png" alt="Line diff of conman.conf" loading="lazy"></a>
+  </figure>
+  <p>Further down, a static route block exists only in current. Collapsed blocks such as
+    <em>48 unchanged lines</em> expand with a click.</p>
+  <figure>
+    <a href="images/walkthrough/15-diff-page-continued.png" target="_blank" rel="noopener"><img src="images/walkthrough/15-diff-page-continued.png" alt="Line diff of conman.conf, continued" loading="lazy"></a>
+  </figure>
+
+  <div class="note">
+    Differences are facts, not verdicts: the report shows what changed, and deciding whether a change is
+    legitimate is the analyst's job.
+  </div>
+
+  <div class="footer">
+    Forensic Diff Viewer — Report Walkthrough
+  </div>
+</div>
+</body>
+</html>
