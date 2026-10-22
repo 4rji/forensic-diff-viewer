@@ -305,6 +305,9 @@ Rule semantics:
 
 ## The report
 
+A walkthrough of every view, with what each field, status and chip means, is in
+[docs/report-guide.md](docs/report-guide.md).
+
 - **Banners:** persistent banners for Integrity FAILED and Incomplete analysis (something
   could not be read or compared). They can be collapsed but never dismissed. Format limits
   (encrypted or unsupported partitions, image-level sources) are the same on every run of a
